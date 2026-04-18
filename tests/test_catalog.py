@@ -12,6 +12,7 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("experience", keys)
         self.assertIn("combat", keys)
         self.assertIn("drops", keys)
+        self.assertIn("survival", keys)
 
     def test_numeric_preset_values_are_clamped(self) -> None:
         meta = SettingMeta(
