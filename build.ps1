@@ -4,7 +4,7 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot
 
 python -m pip install --upgrade pip
-python -m pip install pyinstaller
+python -m pip install -r requirements.txt
 
 if (Test-Path build) {
     Remove-Item -LiteralPath build -Recurse -Force
