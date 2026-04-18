@@ -197,7 +197,7 @@ class SoulmaskTrainerApp(tk.Tk):
 
         home_tab = ttk.Frame(self.notebook, padding=18)
         home_tab.columnconfigure(0, weight=1)
-        home_tab.rowconfigure(4, weight=1)
+        home_tab.rowconfigure(5, weight=1)
         self.notebook.add(home_tab, text="首页")
 
         current_path = self.settings_dir_var.get().strip()
@@ -206,6 +206,25 @@ class SoulmaskTrainerApp(tk.Tk):
         if self.profile_combo is not None:
             profile_values = self.profile_combo.cget("values")
             profile_count = len(profile_values) if profile_values else 0
+
+        easy_lookup = {preset.name: preset for preset in EASY_PRESETS}
+        module_lookup = {module.title: module for module in MODULES}
+
+        def find_module_preset(module_title: str, preset_name: str) -> ModulePreset:
+            module = module_lookup[module_title]
+            for preset in module.presets:
+                if preset.name == preset_name:
+                    return preset
+            raise KeyError(f"Unknown preset {preset_name!r} for module {module_title!r}")
+
+        def apply_home_bundle(bundle_name: str, *value_sets: dict[str, Any]) -> None:
+            if loaded_profile is None:
+                return
+            merged_values: dict[str, Any] = {}
+            for value_set in value_sets:
+                merged_values.update(value_set)
+            updated_count = self._apply_values_to_fields(merged_values)
+            self.status_var.set(f"已应用首页直达方案“{bundle_name}”，更新 {updated_count} 个字段。")
 
         if loaded_profile is None:
             hero_text = "先选目录，再选模板。加载成功后，下面的大卡片会带你一步一步改。"
@@ -280,8 +299,91 @@ class SoulmaskTrainerApp(tk.Tk):
                 state=state,
             ).grid(row=1, column=0, sticky="ew", pady=(14, 0))
 
+        demand_frame = ttk.LabelFrame(home_tab, text="常见需求直达（配置版）", padding=14)
+        demand_frame.grid(row=2, column=0, sticky="ew")
+        demand_frame.columnconfigure(0, weight=1)
+        demand_frame.columnconfigure(1, weight=1)
+        demand_frame.columnconfigure(2, weight=1)
+
+        demand_cards = [
+            (
+                "快速升级",
+                "更像传统修改器里的经验倍率拉高。会直接提升成长、训练和等级推进速度。",
+                lambda: apply_home_bundle("快速升级", find_module_preset("经验与等级", "极速升级").values),
+                "经验与等级",
+            ),
+            (
+                "战斗更轻松",
+                "更像高伤害、低承伤、低耐久压力的爽玩模式，适合单人推进。",
+                lambda: self._apply_easy_preset(easy_lookup["无双单人"]),
+                "战斗系统",
+            ),
+            (
+                "高掉落高收益",
+                "更像资源翻倍和高收益模式，集中拉高采集、掉落和宝箱收益。",
+                lambda: apply_home_bundle("高掉落高收益", find_module_preset("掉落与物品", "海量掉落").values),
+                "掉落与物品",
+            ),
+            (
+                "长续航低消耗",
+                "更接近“无限体力/饮水/饱食/精神”的配置版效果：提高恢复并把常见消耗降到最低。",
+                lambda: apply_home_bundle(
+                    "长续航低消耗",
+                    find_module_preset("生存与恢复", "无饥无渴").values,
+                    find_module_preset("生存与恢复", "永恒体力").values,
+                ),
+                "生存与恢复",
+            ),
+            (
+                "建造更自由",
+                "更接近无限建造和工业扩张效果：放宽建筑限制，并提高生产设施上限。",
+                lambda: apply_home_bundle(
+                    "建造更自由",
+                    find_module_preset("建筑系统", "无限建造").values,
+                    find_module_preset("制造与生产", "工业帝国").values,
+                ),
+                "建筑系统",
+            ),
+            (
+                "部落快速扩编",
+                "适合想更快扩族人、公会和营火规模的玩法，不是实时改 clan 生命体力。",
+                lambda: apply_home_bundle("部落快速扩编", find_module_preset("NPC与招募", "部落扩编").values),
+                "NPC与招募",
+            ),
+        ]
+        for index, (title, description, command, tab_title) in enumerate(demand_cards):
+            card = ttk.LabelFrame(demand_frame, text=title, padding=12)
+            row = index // 3
+            column = index % 3
+            card.grid(
+                row=row,
+                column=column,
+                sticky="nsew",
+                padx=(0, 8) if column < 2 else 0,
+                pady=(0, 12),
+            )
+            card.columnconfigure(0, weight=1)
+            ttk.Label(card, text=description, justify="left", wraplength=240).grid(row=0, column=0, sticky="w")
+            button_row = ttk.Frame(card)
+            button_row.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+            button_row.columnconfigure(0, weight=1)
+            button_row.columnconfigure(1, weight=1)
+            ttk.Button(
+                button_row,
+                text="一键应用",
+                command=command,
+                style="HomeQuick.TButton",
+                state="normal" if loaded_profile is not None else "disabled",
+            ).grid(row=0, column=0, sticky="ew")
+            ttk.Button(
+                button_row,
+                text="查看页签",
+                command=lambda selected_tab=tab_title: self._select_tab(selected_tab),
+                state="normal" if loaded_profile is not None else "disabled",
+            ).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
         quick_frame = ttk.LabelFrame(home_tab, text="常用大按钮", padding=14)
-        quick_frame.grid(row=2, column=0, sticky="ew")
+        quick_frame.grid(row=3, column=0, sticky="ew")
         quick_frame.columnconfigure(0, weight=1)
         quick_frame.columnconfigure(1, weight=1)
         quick_frame.columnconfigure(2, weight=1)
@@ -302,7 +404,7 @@ class SoulmaskTrainerApp(tk.Tk):
             ).grid(row=0, column=index, sticky="ew", padx=(0, 8) if index < len(quick_buttons) - 1 else 0)
 
         status_frame = ttk.LabelFrame(home_tab, text="当前状态", padding=14)
-        status_frame.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        status_frame.grid(row=4, column=0, sticky="ew", pady=(14, 0))
         status_frame.columnconfigure(1, weight=1)
         ttk.Label(status_frame, text="目录").grid(row=0, column=0, sticky="nw")
         ttk.Label(
@@ -321,7 +423,7 @@ class SoulmaskTrainerApp(tk.Tk):
         ttk.Label(status_frame, text=str(profile_count), justify="left").grid(row=2, column=1, sticky="w", pady=(10, 0))
 
         capability_frame = ttk.LabelFrame(home_tab, text="这个修改器能改什么", padding=14)
-        capability_frame.grid(row=4, column=0, sticky="nsew", pady=(14, 0))
+        capability_frame.grid(row=5, column=0, sticky="nsew", pady=(14, 0))
         capability_frame.columnconfigure(0, weight=1)
         capability_frame.columnconfigure(1, weight=1)
         capability_cards = (

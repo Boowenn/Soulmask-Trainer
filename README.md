@@ -11,6 +11,7 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Read the matching `GameXishuConfig_Template*.json` metadata files
 - Beginner-friendly `傻瓜版` page with one-click combinations and a short list of common settings
 - Show a guided home page with large step cards, big action buttons, and a summary of what the trainer can change
+- Offer home-page shortcut cards for common goals such as faster leveling, lower upkeep, higher drops, and easier building
 - Edit visible settings through a desktop UI
 - Export the current setup as a reusable JSON preset
 - Export only the unsaved changes as a lightweight preset
