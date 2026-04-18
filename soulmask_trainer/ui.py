@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from soulmask_trainer.catalog import EASY_FIELDS, EASY_PRESETS, EasyPreset, MODULES, ModuleDefinition, ModulePreset, normalize_preset_value
-from soulmask_trainer.data import LoadedProfile, SettingMeta, TrainerDataError, TrainerRepository
+from soulmask_trainer.data import LoadedProfile, PresetData, SettingMeta, TrainerDataError, TrainerRepository
 
 
 @dataclass
@@ -93,6 +94,9 @@ class SoulmaskTrainerApp(tk.Tk):
         ttk.Button(toolbar, text="重新载入", command=self._load_selected_profile).grid(row=1, column=2, pady=(10, 0))
         ttk.Button(toolbar, text="保存", command=self._save_profile).grid(row=1, column=3, pady=(10, 0), padx=(0, 8))
         ttk.Button(toolbar, text="恢复最近备份", command=self._restore_profile).grid(row=1, column=4, pady=(10, 0))
+        ttk.Button(toolbar, text="导出预设", command=self._export_preset).grid(row=2, column=2, pady=(10, 0))
+        ttk.Button(toolbar, text="导入预设", command=self._import_preset).grid(row=2, column=3, pady=(10, 0), padx=(0, 8))
+        ttk.Button(toolbar, text="批量应用", command=self._open_batch_apply_dialog).grid(row=2, column=4, pady=(10, 0))
 
         self.notebook = ttk.Notebook(self)
         self.notebook.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
@@ -421,24 +425,16 @@ class SoulmaskTrainerApp(tk.Tk):
                 row.grid_remove()
 
     def _apply_preset(self, module: ModuleDefinition, preset: ModulePreset) -> None:
-        updated_count = 0
-        for key, value in preset.values.items():
-            state = self.field_states.get(key)
-            if state is None:
-                continue
-
-            normalized_value = normalize_preset_value(state.meta, value)
-            if state.meta.is_toggle:
-                state.variable.set(bool(normalized_value))
-            else:
-                state.variable.set(self._format_value(normalized_value))
-            updated_count += 1
-
+        updated_count = self._apply_values_to_fields(preset.values)
         self.status_var.set(f"已应用预设“{preset.name}”，更新 {updated_count} 个字段。")
 
     def _apply_easy_preset(self, preset: EasyPreset) -> None:
+        updated_count = self._apply_values_to_fields(preset.values)
+        self.status_var.set(f"已应用傻瓜版方案“{preset.name}”，更新 {updated_count} 个字段。")
+
+    def _apply_values_to_fields(self, values: dict[str, Any]) -> int:
         updated_count = 0
-        for key, value in preset.values.items():
+        for key, value in values.items():
             state = self.field_states.get(key)
             if state is None:
                 continue
@@ -449,8 +445,7 @@ class SoulmaskTrainerApp(tk.Tk):
             else:
                 state.variable.set(self._format_value(normalized_value))
             updated_count += 1
-
-        self.status_var.set(f"已应用傻瓜版方案“{preset.name}”，更新 {updated_count} 个字段。")
+        return updated_count
 
     def _collect_values(self) -> dict[str, Any]:
         if self.loaded_profile is None:
@@ -500,6 +495,127 @@ class SoulmaskTrainerApp(tk.Tk):
             return
 
         self.status_var.set(f"已保存 {self.loaded_profile.profile_path.name}，备份位于 {backup_path}.")
+        self._load_selected_profile()
+
+    def _export_preset(self) -> None:
+        if self.repository is None or self.loaded_profile is None:
+            return
+
+        destination = filedialog.asksaveasfilename(
+            title="导出当前预设",
+            defaultextension=".json",
+            filetypes=[("JSON 文件", "*.json")],
+            initialfile=f"{Path(self.loaded_profile.profile_path.name).stem}-preset.json",
+        )
+        if not destination:
+            return
+
+        try:
+            values = self._collect_values()
+            self.repository.export_preset(Path(destination), self.loaded_profile.profile_path.name, values)
+        except TrainerDataError as error:
+            messagebox.showerror("导出失败", str(error))
+            self.status_var.set(str(error))
+            return
+
+        self.status_var.set(f"已导出预设到 {destination}。")
+
+    def _import_preset(self) -> None:
+        if self.repository is None or self.loaded_profile is None:
+            return
+
+        source = filedialog.askopenfilename(
+            title="导入预设",
+            filetypes=[("JSON 文件", "*.json")],
+            initialdir=str(Path.cwd()),
+        )
+        if not source:
+            return
+
+        try:
+            preset = self.repository.import_preset(Path(source))
+        except (TrainerDataError, OSError, ValueError, json.JSONDecodeError) as error:
+            messagebox.showerror("导入失败", str(error))
+            self.status_var.set(str(error))
+            return
+
+        updated_count = self._apply_values_to_fields(preset.values)
+        self.status_var.set(f"已导入预设“{preset.source_profile}”，更新 {updated_count} 个字段。")
+
+    def _open_batch_apply_dialog(self) -> None:
+        if self.repository is None or self.loaded_profile is None:
+            return
+
+        profile_names = [path.name for path in self.repository.list_profiles()]
+        dialog = tk.Toplevel(self)
+        dialog.title("批量应用到多个模板")
+        dialog.geometry("520x520")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            dialog,
+            text="选择要套用当前数值的模板。保存前会为每个模板分别创建备份。",
+            justify="left",
+            padding=(12, 12, 12, 0),
+        ).grid(row=0, column=0, sticky="ew")
+
+        list_frame = ttk.Frame(dialog, padding=12)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED)
+        listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        listbox.configure(yscrollcommand=scrollbar.set)
+
+        for profile_name in profile_names:
+            listbox.insert(tk.END, profile_name)
+
+        try:
+            current_index = profile_names.index(self.loaded_profile.profile_path.name)
+            listbox.selection_set(current_index)
+            listbox.see(current_index)
+        except ValueError:
+            pass
+
+        action_frame = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        action_frame.grid(row=2, column=0, sticky="ew")
+        ttk.Button(action_frame, text="全选", command=lambda: listbox.selection_set(0, tk.END)).grid(row=0, column=0)
+        ttk.Button(action_frame, text="清空", command=lambda: listbox.selection_clear(0, tk.END)).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(action_frame, text="取消", command=dialog.destroy).grid(row=0, column=2, padx=(16, 0))
+        ttk.Button(
+            action_frame,
+            text="应用当前数值",
+            command=lambda: self._apply_batch_selection(dialog, listbox, profile_names),
+        ).grid(row=0, column=3, padx=(8, 0))
+
+    def _apply_batch_selection(self, dialog: tk.Toplevel, listbox: tk.Listbox, profile_names: list[str]) -> None:
+        if self.repository is None or self.loaded_profile is None:
+            return
+
+        selected_indices = listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("未选择模板", "请至少选择一个模板。", parent=dialog)
+            return
+
+        selected_profiles = [profile_names[index] for index in selected_indices]
+        try:
+            values = self._collect_values()
+            backup_paths = self.repository.save_profiles(selected_profiles, values)
+        except TrainerDataError as error:
+            messagebox.showerror("批量应用失败", str(error), parent=dialog)
+            self.status_var.set(str(error))
+            return
+
+        dialog.destroy()
+        self.status_var.set(
+            f"已批量应用到 {len(selected_profiles)} 个模板，最后一个备份位于 {list(backup_paths.values())[-1]}。"
+        )
         self._load_selected_profile()
 
     def _restore_profile(self) -> None:

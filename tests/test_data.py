@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,6 +105,31 @@ class TrainerRepositoryTests(unittest.TestCase):
 
         self.assertTrue(restored_path.is_file())
         self.assertEqual(payload["0"]["ExpRatio"], 1)
+
+    def test_save_profiles_updates_multiple_targets(self) -> None:
+        backup_paths = self.repository.save_profiles(
+            ["GameXishu_Template.json", "GameXishu_Template_PVP.json"],
+            {"ExpRatio": 9},
+        )
+        pve_payload, _ = read_json_object(self.settings_dir / "GameXishu_Template.json")
+        pvp_payload, _ = read_json_object(self.settings_dir / "GameXishu_Template_PVP.json")
+
+        self.assertEqual(set(backup_paths.keys()), {"GameXishu_Template.json", "GameXishu_Template_PVP.json"})
+        self.assertEqual(pve_payload["0"]["ExpRatio"], 9)
+        self.assertEqual(pvp_payload["0"]["ExpRatio"], 9)
+
+    def test_export_and_import_preset_round_trip(self) -> None:
+        preset_path = self.settings_dir / "my-preset.json"
+        values = {"ExpRatio": 7, "JingShenNoXiaoHao": 1}
+
+        self.repository.export_preset(preset_path, "GameXishu_Template.json", values)
+        imported = self.repository.import_preset(preset_path)
+        raw_payload = json.loads(preset_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(imported.source_profile, "GameXishu_Template.json")
+        self.assertEqual(imported.values, values)
+        self.assertEqual(raw_payload["values"], values)
+        self.assertEqual(raw_payload["schema_version"], 1)
 
 
 class EncodingTests(unittest.TestCase):

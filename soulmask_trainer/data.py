@@ -36,6 +36,12 @@ class LoadedProfile:
     metadata: dict[str, SettingMeta]
 
 
+@dataclass(frozen=True)
+class PresetData:
+    source_profile: str
+    values: dict[str, Any]
+
+
 class TrainerDataError(RuntimeError):
     """Raised when Soulmask gameplay settings cannot be loaded or saved."""
 
@@ -187,6 +193,37 @@ class TrainerRepository:
         payload = {"0": values}
         write_json_object(loaded_profile.profile_path, payload, loaded_profile.profile_encoding)
         return backup_path
+
+    def save_profiles(self, profile_names: list[str], values: dict[str, Any]) -> dict[str, Path]:
+        backup_paths: dict[str, Path] = {}
+        for profile_name in profile_names:
+            loaded_profile = self.load_profile(profile_name)
+            merged_values = dict(loaded_profile.values)
+            merged_values.update(values)
+            backup_paths[profile_name] = self.save_profile(loaded_profile, merged_values)
+        return backup_paths
+
+    def export_preset(self, destination_path: Path, source_profile: str, values: dict[str, Any]) -> None:
+        payload = {
+            "schema_version": 1,
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "source_profile": source_profile,
+            "values": values,
+        }
+        destination_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def import_preset(self, preset_path: Path) -> PresetData:
+        payload = json.loads(preset_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and "values" in payload and isinstance(payload["values"], dict):
+            source_profile = str(payload.get("source_profile") or preset_path.stem)
+            values = dict(payload["values"])
+            return PresetData(source_profile=source_profile, values=values)
+        if isinstance(payload, dict):
+            return PresetData(source_profile=preset_path.stem, values=dict(payload))
+        raise TrainerDataError(f"Preset file format is invalid: {preset_path}")
 
     def restore_latest_backup(self, profile_name: str) -> Path:
         latest_backup = self.latest_backup_for(profile_name)

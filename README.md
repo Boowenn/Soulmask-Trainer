@@ -11,6 +11,9 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Read the matching `GameXishuConfig_Template*.json` metadata files
 - Beginner-friendly `傻瓜版` page with one-click combinations and a short list of common settings
 - Edit visible settings through a desktop UI
+- Export the current setup as a reusable JSON preset
+- Import a preset JSON and apply it to the current template
+- Batch-apply the current setup to multiple templates in one pass
 - Dedicated "经验与等级" tab with quick presets
 - Dedicated "战斗系统" tab with quick presets
 - Dedicated "掉落与物品" tab with quick presets
