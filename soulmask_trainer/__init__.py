@@ -1,0 +1,1 @@
+"""Soulmask configuration trainer package."""
