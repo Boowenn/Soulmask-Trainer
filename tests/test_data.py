@@ -7,6 +7,7 @@ from pathlib import Path
 
 from soulmask_trainer.data import (
     TrainerRepository,
+    build_full_value_diff,
     build_value_diff,
     detect_text_encoding,
     get_changed_values,
@@ -175,6 +176,34 @@ class TrainerRepositoryTests(unittest.TestCase):
         self.assertEqual([snapshot.path.name for snapshot in listed_snapshots], [second_snapshot.name, first_snapshot.name])
         self.assertEqual(listed_snapshots[0].snapshot_name, "毕业档")
 
+    def test_rename_snapshot_updates_metadata_and_filename(self) -> None:
+        snapshot_path = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 2},
+            "开荒档",
+        )
+
+        renamed_path = self.repository.rename_snapshot(snapshot_path, "终局档")
+        renamed_snapshot = self.repository.load_snapshot(renamed_path)
+
+        self.assertNotEqual(renamed_path.name, snapshot_path.name)
+        self.assertFalse(snapshot_path.exists())
+        self.assertTrue(renamed_path.is_file())
+        self.assertEqual(renamed_snapshot.snapshot_name, "终局档")
+
+    def test_delete_snapshot_removes_file_and_empty_directory(self) -> None:
+        snapshot_path = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 2},
+            "临时档",
+        )
+        snapshot_dir = snapshot_path.parent
+
+        self.repository.delete_snapshot(snapshot_path)
+
+        self.assertFalse(snapshot_path.exists())
+        self.assertFalse(snapshot_dir.exists())
+
 
 class EncodingTests(unittest.TestCase):
     def test_detect_utf16_bom(self) -> None:
@@ -206,6 +235,21 @@ class ValueDiffTests(unittest.TestCase):
         self.assertEqual(diff[1].key, "NewField")
         self.assertIsNone(diff[1].before)
         self.assertEqual(diff[1].after, 9)
+
+    def test_build_full_value_diff_reports_removed_and_added_keys(self) -> None:
+        before = {"ExpRatio": 2, "MaxLevel": 40}
+        after = {"ExpRatio": 4, "TrainingExpRatio": 8}
+
+        diff = build_full_value_diff(before, after)
+
+        self.assertEqual(
+            [(item.key, item.before, item.after) for item in diff],
+            [
+                ("ExpRatio", 2, 4),
+                ("MaxLevel", 40, None),
+                ("TrainingExpRatio", None, 8),
+            ],
+        )
 
     def test_sanitize_file_component_replaces_windows_unsafe_characters(self) -> None:
         sanitized = sanitize_file_component('毕业档: Build/Final?*', 'snapshot')

@@ -19,6 +19,8 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Batch-apply the current setup to multiple templates in one pass
 - Save the current template as a named snapshot
 - Compare the current setup with a saved snapshot before restoring it
+- Compare two saved snapshots side by side
+- Rename or delete snapshots directly from the snapshot center
 - Open a simple preset/snapshot center for reuse workflows
 - Filter the full parameter list down to changed items only
 - Undo all unsaved edits for the current template in one click

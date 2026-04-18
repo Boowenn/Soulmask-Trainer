@@ -14,6 +14,7 @@ BACKUP_DIRECTORY_NAME = "_SoulmaskTrainerBackup"
 SNAPSHOT_DIRECTORY_NAME = "_SoulmaskTrainerSnapshots"
 RECENT_PRESETS_FILE_NAME = "_SoulmaskTrainerRecentPresets.json"
 MAX_RECENT_PRESETS = 8
+SNAPSHOT_FILENAME_PREFIX_LENGTH = 22
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,15 @@ def build_value_diff(current_values: dict[str, Any], incoming_values: dict[str, 
     ]
 
 
+def build_full_value_diff(before_values: dict[str, Any], after_values: dict[str, Any]) -> list[ValueDiff]:
+    keys = sorted(set(before_values) | set(after_values))
+    return [
+        ValueDiff(key=key, before=before_values.get(key), after=after_values.get(key))
+        for key in keys
+        if before_values.get(key) != after_values.get(key)
+    ]
+
+
 def sanitize_file_component(value: str, fallback: str) -> str:
     cleaned = "".join("_" if char in '<>:"/\\|?*' else char for char in value).strip().strip(".")
     return (cleaned[:80] or fallback).strip()
@@ -130,6 +140,13 @@ class TrainerRepository:
     def snapshots_dir_for(self, source_profile: str) -> Path:
         profile_stem = sanitize_file_component(Path(source_profile).stem, "profile")
         return self.snapshots_root() / profile_stem
+
+    @staticmethod
+    def snapshot_filename_prefix(snapshot_path: Path) -> str:
+        stem = snapshot_path.stem
+        if len(stem) < SNAPSHOT_FILENAME_PREFIX_LENGTH:
+            raise TrainerDataError(f"Snapshot filename is invalid: {snapshot_path.name}")
+        return stem[:SNAPSHOT_FILENAME_PREFIX_LENGTH]
 
     @staticmethod
     def discover_settings_dir(start_dir: Path | None = None) -> Path | None:
@@ -424,6 +441,47 @@ class TrainerRepository:
             if len(snapshots) >= limit:
                 break
         return snapshots
+
+    def rename_snapshot(self, snapshot_path: Path, snapshot_name: str) -> Path:
+        snapshot = self.load_snapshot(snapshot_path)
+        updated_name = snapshot_name.strip()
+        if not updated_name:
+            raise TrainerDataError("Snapshot name cannot be empty.")
+
+        safe_name = sanitize_file_component(updated_name, "snapshot")
+        prefix = self.snapshot_filename_prefix(snapshot_path)
+        target_path = snapshot_path.with_name(f"{prefix}-{safe_name}.json")
+        if target_path != snapshot_path and target_path.exists():
+            raise TrainerDataError(f"Snapshot already exists: {target_path.name}")
+
+        payload = {
+            "schema_version": 1,
+            "kind": "snapshot",
+            "created_at": snapshot.created_at,
+            "source_profile": snapshot.source_profile,
+            "snapshot_name": updated_name,
+            "values": snapshot.values,
+        }
+
+        snapshot_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        if target_path != snapshot_path:
+            snapshot_path = snapshot_path.rename(target_path)
+        return snapshot_path
+
+    def delete_snapshot(self, snapshot_path: Path) -> None:
+        if not snapshot_path.is_file():
+            raise TrainerDataError(f"Snapshot does not exist: {snapshot_path}")
+
+        snapshot_dir = snapshot_path.parent
+        snapshot_path.unlink()
+
+        try:
+            snapshot_dir.rmdir()
+        except OSError:
+            pass
 
     def restore_latest_backup(self, profile_name: str) -> Path:
         latest_backup = self.latest_backup_for(profile_name)

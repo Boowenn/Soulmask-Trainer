@@ -17,6 +17,7 @@ from soulmask_trainer.data import (
     TrainerDataError,
     TrainerRepository,
     ValueDiff,
+    build_full_value_diff,
     build_value_diff,
     get_changed_values,
 )
@@ -754,6 +755,109 @@ class SoulmaskTrainerApp(tk.Tk):
             command=lambda: self._apply_snapshot_from_data(dialog, snapshot),
         ).grid(row=0, column=1, padx=(8, 0))
 
+    def _open_snapshot_pair_compare_dialog(
+        self,
+        left_snapshot: SnapshotData,
+        right_snapshot: SnapshotData,
+        diff_items: list[ValueDiff],
+    ) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("快照对比")
+        dialog.geometry("860x560")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(1, weight=1)
+
+        summary_lines = [
+            f"快照A: {left_snapshot.snapshot_name} | {self._format_timestamp(left_snapshot.created_at)}",
+            f"快照B: {right_snapshot.snapshot_name} | {self._format_timestamp(right_snapshot.created_at)}",
+            f"快照差异: {len(diff_items)} 项",
+        ]
+        ttk.Label(
+            dialog,
+            text="\n".join(summary_lines),
+            justify="left",
+            padding=(12, 12, 12, 0),
+        ).grid(row=0, column=0, sticky="ew")
+
+        list_frame = ttk.Frame(dialog, padding=12)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        listbox = tk.Listbox(list_frame)
+        listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        listbox.configure(yscrollcommand=scrollbar.set)
+
+        for diff in diff_items:
+            listbox.insert(tk.END, self._format_diff_line(diff, before_label="快照A", after_label="快照B"))
+
+        action_frame = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        action_frame.grid(row=2, column=0, sticky="ew")
+        ttk.Button(action_frame, text="关闭", command=dialog.destroy).grid(row=0, column=0)
+        ttk.Button(
+            action_frame,
+            text="套用快照A",
+            command=lambda: self._apply_snapshot_from_data(dialog, left_snapshot),
+        ).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(
+            action_frame,
+            text="套用快照B",
+            command=lambda: self._apply_snapshot_from_data(dialog, right_snapshot),
+        ).grid(row=0, column=2, padx=(8, 0))
+
+    def _rename_snapshot(self, snapshot: SnapshotData, parent: tk.Misc | None = None) -> Path | None:
+        if self.repository is None:
+            return None
+
+        new_name = simpledialog.askstring(
+            "重命名快照",
+            "输入新的快照名称：",
+            initialvalue=snapshot.snapshot_name,
+            parent=parent or self,
+        )
+        if new_name is None:
+            return None
+
+        try:
+            renamed_path = self.repository.rename_snapshot(snapshot.path, new_name)
+        except (TrainerDataError, OSError) as error:
+            messagebox.showerror("重命名失败", str(error), parent=parent or self)
+            self.status_var.set(str(error))
+            return None
+
+        self.status_var.set(f"已重命名快照为 {renamed_path.name}。")
+        return renamed_path
+
+    def _delete_snapshots(self, snapshots: list[SnapshotData], parent: tk.Misc | None = None) -> bool:
+        if self.repository is None or not snapshots:
+            return False
+
+        names_preview = "、".join(snapshot.snapshot_name for snapshot in snapshots[:3])
+        if len(snapshots) > 3:
+            names_preview = f"{names_preview} 等 {len(snapshots)} 个快照"
+        confirmed = messagebox.askyesno(
+            "删除快照",
+            f"确定要删除 {names_preview} 吗？这个操作不能撤销。",
+            parent=parent or self,
+        )
+        if not confirmed:
+            return False
+
+        try:
+            for snapshot in snapshots:
+                self.repository.delete_snapshot(snapshot.path)
+        except (TrainerDataError, OSError) as error:
+            messagebox.showerror("删除快照失败", str(error), parent=parent or self)
+            self.status_var.set(str(error))
+            return False
+
+        self.status_var.set(f"已删除 {len(snapshots)} 个快照。")
+        return True
+
     def _apply_snapshot_from_data(self, dialog: tk.Toplevel | None, snapshot: SnapshotData) -> None:
         try:
             current_values = self._collect_values()
@@ -870,7 +974,7 @@ class SoulmaskTrainerApp(tk.Tk):
                 )
             except OSError:
                 pass
-        except TrainerDataError as error:
+        except (TrainerDataError, OSError) as error:
             messagebox.showerror("导出失败", str(error))
             self.status_var.set(str(error))
             return
@@ -952,7 +1056,7 @@ class SoulmaskTrainerApp(tk.Tk):
                 values,
                 snapshot_name=snapshot_name or None,
             )
-        except TrainerDataError as error:
+        except (TrainerDataError, OSError) as error:
             messagebox.showerror("保存快照失败", str(error))
             self.status_var.set(str(error))
             return None
@@ -1002,7 +1106,7 @@ class SoulmaskTrainerApp(tk.Tk):
         snapshot_frame.columnconfigure(0, weight=1)
         snapshot_frame.rowconfigure(0, weight=1)
 
-        snapshot_listbox = tk.Listbox(snapshot_frame)
+        snapshot_listbox = tk.Listbox(snapshot_frame, selectmode=tk.EXTENDED)
         snapshot_listbox.grid(row=0, column=0, sticky="nsew")
         snapshot_scrollbar = ttk.Scrollbar(snapshot_frame, orient="vertical", command=snapshot_listbox.yview)
         snapshot_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -1036,12 +1140,26 @@ class SoulmaskTrainerApp(tk.Tk):
             selected_entry = recent_presets[selection[0]]
             self._import_preset_from_path(selected_entry.path)
 
-        def compare_selected_snapshot() -> None:
-            selection = snapshot_listbox.curselection()
+        def get_selected_snapshots(min_count: int = 1, max_count: int | None = None) -> list[SnapshotData]:
+            selection = list(snapshot_listbox.curselection())
             if not selection or not snapshots:
-                messagebox.showwarning("未选择快照", "请先选择一个快照。", parent=dialog)
+                messagebox.showwarning("未选择快照", "请先选择快照。", parent=dialog)
+                return []
+
+            selected_items = [snapshots[index] for index in selection]
+            if len(selected_items) < min_count:
+                messagebox.showwarning("选择数量不足", f"请至少选择 {min_count} 个快照。", parent=dialog)
+                return []
+            if max_count is not None and len(selected_items) > max_count:
+                messagebox.showwarning("选择过多", f"请最多选择 {max_count} 个快照。", parent=dialog)
+                return []
+            return selected_items
+
+        def compare_selected_snapshot() -> None:
+            selected_items = get_selected_snapshots(min_count=1, max_count=1)
+            if not selected_items:
                 return
-            selected_snapshot = snapshots[selection[0]]
+            selected_snapshot = selected_items[0]
             try:
                 current_values = self._collect_values()
             except TrainerDataError as error:
@@ -1049,7 +1167,7 @@ class SoulmaskTrainerApp(tk.Tk):
                 self.status_var.set(str(error))
                 return
 
-            diff_items = build_value_diff(selected_snapshot.values, current_values)
+            diff_items = build_full_value_diff(selected_snapshot.values, current_values)
             if not diff_items:
                 messagebox.showinfo("没有差异", "当前数值与这个快照完全一致。", parent=dialog)
                 self.status_var.set("当前数值与所选快照一致。")
@@ -1057,12 +1175,40 @@ class SoulmaskTrainerApp(tk.Tk):
 
             self._open_snapshot_compare_dialog(selected_snapshot, diff_items)
 
-        def apply_selected_snapshot() -> None:
-            selection = snapshot_listbox.curselection()
-            if not selection or not snapshots:
-                messagebox.showwarning("未选择快照", "请先选择一个快照。", parent=dialog)
+        def compare_two_snapshots() -> None:
+            selected_items = get_selected_snapshots(min_count=2, max_count=2)
+            if not selected_items:
                 return
-            self._apply_snapshot_from_data(dialog, snapshots[selection[0]])
+
+            left_snapshot, right_snapshot = selected_items
+            diff_items = build_full_value_diff(left_snapshot.values, right_snapshot.values)
+            if not diff_items:
+                messagebox.showinfo("没有差异", "这两个快照完全一致。", parent=dialog)
+                self.status_var.set("所选两个快照完全一致。")
+                return
+
+            self._open_snapshot_pair_compare_dialog(left_snapshot, right_snapshot, diff_items)
+
+        def apply_selected_snapshot() -> None:
+            selected_items = get_selected_snapshots(min_count=1, max_count=1)
+            if not selected_items:
+                return
+            self._apply_snapshot_from_data(dialog, selected_items[0])
+
+        def rename_selected_snapshot() -> None:
+            selected_items = get_selected_snapshots(min_count=1, max_count=1)
+            if not selected_items:
+                return
+            renamed_path = self._rename_snapshot(selected_items[0], parent=dialog)
+            if renamed_path is not None:
+                refresh_lists()
+
+        def delete_selected_snapshots() -> None:
+            selected_items = get_selected_snapshots(min_count=1)
+            if not selected_items:
+                return
+            if self._delete_snapshots(selected_items, parent=dialog):
+                refresh_lists()
 
         def save_snapshot_and_refresh() -> None:
             snapshot_path = self._save_snapshot()
@@ -1074,8 +1220,11 @@ class SoulmaskTrainerApp(tk.Tk):
 
         ttk.Button(snapshot_action_frame, text="保存当前快照", command=save_snapshot_and_refresh).grid(row=0, column=0)
         ttk.Button(snapshot_action_frame, text="对比当前", command=compare_selected_snapshot).grid(row=0, column=1, padx=(8, 0))
-        ttk.Button(snapshot_action_frame, text="套用选中快照", command=apply_selected_snapshot).grid(row=0, column=2, padx=(8, 0))
-        ttk.Button(snapshot_action_frame, text="刷新列表", command=refresh_lists).grid(row=0, column=3, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="比较两个快照", command=compare_two_snapshots).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="套用选中快照", command=apply_selected_snapshot).grid(row=0, column=3, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="重命名快照", command=rename_selected_snapshot).grid(row=0, column=4, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="删除快照", command=delete_selected_snapshots).grid(row=0, column=5, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="刷新列表", command=refresh_lists).grid(row=0, column=6, padx=(8, 0))
 
         preset_listbox.bind("<Double-Button-1>", lambda _event: apply_selected_preset())
         snapshot_listbox.bind("<Double-Button-1>", lambda _event: compare_selected_snapshot())
