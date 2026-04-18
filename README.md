@@ -10,7 +10,7 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Load official `GameXishu_Template*.json` profiles
 - Read the matching `GameXishuConfig_Template*.json` metadata files
 - Beginner-friendly `傻瓜版` page with one-click combinations and a short list of common settings
-- Show a plain-language "how to use it" guide and a summary of what the trainer can change on the home page
+- Show a guided home page with large step cards, big action buttons, and a summary of what the trainer can change
 - Edit visible settings through a desktop UI
 - Export the current setup as a reusable JSON preset
 - Export only the unsaved changes as a lightweight preset
@@ -72,3 +72,4 @@ The packaged executable is written to `dist/SoulmaskTrainer.exe`.
 - Backups are stored under `WS\Config\GameplaySettings\_SoulmaskTrainerBackup`.
 - Snapshots are stored under `WS\Config\GameplaySettings\_SoulmaskTrainerSnapshots`.
 - Recent preset history is stored in `WS\Config\GameplaySettings\_SoulmaskTrainerRecentPresets.json`.
+- This project remains a config-file editor. It does not provide process injection, memory freezing, anti-cheat bypassing, or live runtime hacks.

@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +80,7 @@ class SoulmaskTrainerApp(tk.Tk):
         self._change_refresh_pending = False
 
         self._apply_window_icon()
+        self._configure_styles()
         self._build_layout()
         self._try_autoload()
 
@@ -105,6 +106,26 @@ class SoulmaskTrainerApp(tk.Tk):
             self.iconphoto(True, self._window_icon)
         except tk.TclError:
             self._window_icon = None
+
+    def _configure_styles(self) -> None:
+        style = ttk.Style(self)
+        try:
+            default_font = tkfont.nametofont("TkDefaultFont")
+        except tk.TclError:
+            return
+
+        hero_font = default_font.copy()
+        hero_font.configure(size=max(default_font.cget("size") + 5, 16), weight="bold")
+        title_font = default_font.copy()
+        title_font.configure(size=max(default_font.cget("size") + 2, 11), weight="bold")
+        note_font = default_font.copy()
+        note_font.configure(size=max(default_font.cget("size") - 1, 9))
+
+        style.configure("HomeHero.TLabel", font=hero_font)
+        style.configure("HomeCardTitle.TLabel", font=title_font)
+        style.configure("HomeNote.TLabel", font=note_font)
+        style.configure("HomeAction.TButton", padding=(18, 16))
+        style.configure("HomeQuick.TButton", padding=(16, 12))
 
     def _build_layout(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -174,9 +195,9 @@ class SoulmaskTrainerApp(tk.Tk):
         if self.notebook is None:
             return
 
-        home_tab = ttk.Frame(self.notebook, padding=16)
+        home_tab = ttk.Frame(self.notebook, padding=18)
         home_tab.columnconfigure(0, weight=1)
-        home_tab.rowconfigure(3, weight=1)
+        home_tab.rowconfigure(4, weight=1)
         self.notebook.add(home_tab, text="首页")
 
         current_path = self.settings_dir_var.get().strip()
@@ -186,99 +207,138 @@ class SoulmaskTrainerApp(tk.Tk):
             profile_values = self.profile_combo.cget("values")
             profile_count = len(profile_values) if profile_values else 0
 
-        intro_frame = ttk.LabelFrame(home_tab, text="现在该怎么做", padding=12)
-        intro_frame.grid(row=0, column=0, sticky="ew")
-        intro_frame.columnconfigure(0, weight=1)
-
         if loaded_profile is None:
-            intro_text = (
-                "当前还没有加载成功，所以中间现在不该是空白操作区。\n"
-                "请先完成下面两步：先选 Soulmask 的 GameplaySettings 目录，再选一个配置模板。"
-            )
+            hero_text = "先选目录，再选模板。加载成功后，下面的大卡片会带你一步一步改。"
+            hero_note = "当前还没进入可编辑状态，所以需要先完成前两步。"
+            mode_title = "当前模式：官方 GameplaySettings 配置编辑"
+            mode_note = "当前版本不做进程注入、内存改写或反作弊相关功能。"
         else:
-            intro_text = (
-                f"当前已加载模板：{loaded_profile.profile_path.name}\n"
-                "建议先去“傻瓜版”点一个一键组合，再按需要微调，最后点击顶部“保存到游戏”。"
-            )
+            hero_text = f"当前模板已加载：{loaded_profile.profile_path.name}"
+            hero_note = "建议先打开傻瓜版点一个一键组合，再微调，最后保存到游戏。"
+            mode_title = "当前模式：配置编辑 + 预设/快照复用"
+            mode_note = "当前版本修改 JSON 配置、预设和快照，不做实时注入。"
 
-        ttk.Label(
-            intro_frame,
-            text=intro_text,
-            justify="left",
-        ).grid(row=0, column=0, sticky="w")
+        hero_frame = ttk.LabelFrame(home_tab, text="开始使用", padding=16)
+        hero_frame.grid(row=0, column=0, sticky="ew")
+        hero_frame.columnconfigure(0, weight=1)
+        hero_frame.columnconfigure(1, weight=1)
+        ttk.Label(hero_frame, text=hero_text, style="HomeHero.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(hero_frame, text=hero_note, style="HomeNote.TLabel").grid(row=1, column=0, sticky="w", pady=(8, 0))
 
-        action_frame = ttk.Frame(intro_frame)
-        action_frame.grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ttk.Button(action_frame, text="1. 选择游戏目录", command=self._choose_settings_dir).grid(row=0, column=0)
-        ttk.Button(action_frame, text="2. 扫描模板", command=self._refresh_profiles).grid(row=0, column=1, padx=(8, 0))
-        ttk.Button(
-            action_frame,
-            text="3. 打开傻瓜版",
-            command=lambda: self._select_tab("傻瓜版"),
-            state="normal" if loaded_profile is not None else "disabled",
-        ).grid(row=0, column=2, padx=(8, 0))
-        ttk.Button(
-            action_frame,
-            text="4. 打开预设/快照中心",
-            command=self._open_reuse_center,
-            state="normal" if loaded_profile is not None else "disabled",
-        ).grid(row=0, column=3, padx=(8, 0))
+        mode_frame = ttk.LabelFrame(hero_frame, text="能力范围", padding=12)
+        mode_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=(18, 0))
+        ttk.Label(mode_frame, text=mode_title, style="HomeCardTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(mode_frame, text=mode_note, justify="left", wraplength=360).grid(row=1, column=0, sticky="w", pady=(8, 0))
 
-        status_frame = ttk.LabelFrame(home_tab, text="当前状态", padding=12)
-        status_frame.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        steps_frame = ttk.LabelFrame(home_tab, text="四步开始", padding=14)
+        steps_frame.grid(row=1, column=0, sticky="ew", pady=(14, 0))
+        steps_frame.columnconfigure(0, weight=1)
+        steps_frame.columnconfigure(1, weight=1)
+
+        steps = [
+            (
+                "第 1 步 选择目录",
+                "先定位到 Soulmask 的 GameplaySettings 目录。选对之后才能扫描模板。",
+                "选择游戏目录",
+                self._choose_settings_dir,
+                "normal",
+            ),
+            (
+                "第 2 步 扫描模板",
+                "把当前目录里的 GameXishu_Template*.json 扫出来，准备进入编辑。",
+                "扫描可用模板",
+                self._refresh_profiles,
+                "normal",
+            ),
+            (
+                "第 3 步 傻瓜版开改",
+                "新手最适合从傻瓜版开始，先点一键组合，再微调常用项。",
+                "打开傻瓜版",
+                lambda: self._select_tab("傻瓜版"),
+                "normal" if loaded_profile is not None else "disabled",
+            ),
+            (
+                "第 4 步 保存或复用",
+                "改完保存到游戏；如果想留方案，就去预设/快照中心做导出、复制和分类。",
+                "打开预设/快照中心",
+                self._open_reuse_center,
+                "normal" if loaded_profile is not None else "disabled",
+            ),
+        ]
+        for index, (title, description, button_text, command, state) in enumerate(steps):
+            card = ttk.LabelFrame(steps_frame, text=title, padding=14)
+            row = index // 2
+            column = index % 2
+            card.grid(row=row, column=column, sticky="nsew", padx=(0, 10) if column == 0 else (10, 0), pady=(0, 12))
+            card.columnconfigure(0, weight=1)
+            ttk.Label(card, text=description, justify="left", wraplength=360).grid(row=0, column=0, sticky="w")
+            ttk.Button(
+                card,
+                text=button_text,
+                command=command,
+                style="HomeAction.TButton",
+                state=state,
+            ).grid(row=1, column=0, sticky="ew", pady=(14, 0))
+
+        quick_frame = ttk.LabelFrame(home_tab, text="常用大按钮", padding=14)
+        quick_frame.grid(row=2, column=0, sticky="ew")
+        quick_frame.columnconfigure(0, weight=1)
+        quick_frame.columnconfigure(1, weight=1)
+        quick_frame.columnconfigure(2, weight=1)
+        quick_frame.columnconfigure(3, weight=1)
+        quick_buttons = [
+            ("保存到游戏", self._save_profile),
+            ("恢复最近备份", self._restore_profile),
+            ("导出当前预设", self._export_preset),
+            ("批量套用", self._open_batch_apply_dialog),
+        ]
+        for index, (label, command) in enumerate(quick_buttons):
+            ttk.Button(
+                quick_frame,
+                text=label,
+                command=command,
+                style="HomeQuick.TButton",
+                state="normal" if loaded_profile is not None else "disabled",
+            ).grid(row=0, column=index, sticky="ew", padx=(0, 8) if index < len(quick_buttons) - 1 else 0)
+
+        status_frame = ttk.LabelFrame(home_tab, text="当前状态", padding=14)
+        status_frame.grid(row=3, column=0, sticky="ew", pady=(14, 0))
         status_frame.columnconfigure(1, weight=1)
         ttk.Label(status_frame, text="目录").grid(row=0, column=0, sticky="nw")
         ttk.Label(
             status_frame,
-            text=current_path or "还没选。请点上面的“1. 选择游戏目录”。",
+            text=current_path or "还没选。请先点上面的“选择游戏目录”。",
             justify="left",
+            wraplength=850,
         ).grid(row=0, column=1, sticky="w")
-        ttk.Label(status_frame, text="模板").grid(row=1, column=0, sticky="nw", pady=(8, 0))
+        ttk.Label(status_frame, text="模板").grid(row=1, column=0, sticky="nw", pady=(10, 0))
         ttk.Label(
             status_frame,
             text=profile_name or "还没加载。先扫描模板，再从顶部下拉框选择。",
             justify="left",
-        ).grid(row=1, column=1, sticky="w", pady=(8, 0))
-        ttk.Label(status_frame, text="可用模板数").grid(row=2, column=0, sticky="nw", pady=(8, 0))
-        ttk.Label(status_frame, text=str(profile_count), justify="left").grid(row=2, column=1, sticky="w", pady=(8, 0))
+        ).grid(row=1, column=1, sticky="w", pady=(10, 0))
+        ttk.Label(status_frame, text="可用模板数").grid(row=2, column=0, sticky="nw", pady=(10, 0))
+        ttk.Label(status_frame, text=str(profile_count), justify="left").grid(row=2, column=1, sticky="w", pady=(10, 0))
 
-        capability_frame = ttk.LabelFrame(home_tab, text="这个修改器能改什么", padding=12)
-        capability_frame.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        capability_frame = ttk.LabelFrame(home_tab, text="这个修改器能改什么", padding=14)
+        capability_frame.grid(row=4, column=0, sticky="nsew", pady=(14, 0))
         capability_frame.columnconfigure(0, weight=1)
         capability_frame.columnconfigure(1, weight=1)
-        capability_items = (
-            "经验与等级：升级倍率、训练经验、等级上限",
-            "战斗系统：输出、承伤、拆建筑、部分 PVP 系数",
-            "掉落与物品：采集、宝箱、怪物掉落、自动化产出",
-            "生存与恢复：生命、体力、食物、精神、气息消耗",
-            "制造与生产：制作时间、转化效率、矿场/索道/船员",
-            "建筑/NPC/动物/耐久：建造限制、招募、成长、腐坏",
+        capability_cards = (
+            ("经验与等级", "升级倍率、训练经验、等级上限"),
+            ("战斗系统", "输出、承伤、拆建筑、部分 PVP 系数"),
+            ("掉落与物品", "采集、宝箱、怪物掉落、自动化产出"),
+            ("生存与恢复", "生命、体力、食物、精神、气息消耗"),
+            ("制造与生产", "制作时间、转化效率、矿场、索道、船员"),
+            ("建筑 / NPC / 动物 / 耐久", "建造限制、招募、成长、腐坏、耐久"),
         )
-        for index, item in enumerate(capability_items):
-            ttk.Label(
-                capability_frame,
-                text=f"{index + 1}. {item}",
-                justify="left",
-            ).grid(
-                row=index // 2,
-                column=index % 2,
-                sticky="w",
-                padx=(0, 18) if index % 2 == 0 else 0,
-                pady=(0, 6),
-            )
-
-        tips_frame = ttk.LabelFrame(home_tab, text="最简单的用法", padding=12)
-        tips_frame.grid(row=3, column=0, sticky="nsew", pady=(12, 0))
-        tips_frame.columnconfigure(0, weight=1)
-        ttk.Label(
-            tips_frame,
-            text=(
-                "新手推荐路线：\n"
-                "1. 选择目录 -> 2. 选择模板 -> 3. 打开傻瓜版 -> 4. 点一个一键组合 -> 5. 保存到游戏。\n"
-                "想保留一套方案时：保存当前快照；想跨模板复用时：导出当前预设。"
-            ),
-            justify="left",
-        ).grid(row=0, column=0, sticky="nw")
+        for index, (title, description) in enumerate(capability_cards):
+            card = ttk.Frame(capability_frame, padding=12)
+            row = index // 2
+            column = index % 2
+            card.grid(row=row, column=column, sticky="nsew", padx=(0, 10) if column == 0 else (10, 0), pady=(0, 10))
+            ttk.Label(card, text=title, style="HomeCardTitle.TLabel").grid(row=0, column=0, sticky="w")
+            ttk.Label(card, text=description, justify="left", wraplength=360).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
     def _select_tab(self, title: str) -> None:
         if self.notebook is None:
