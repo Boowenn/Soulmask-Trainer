@@ -11,6 +11,7 @@ from soulmask_trainer.data import (
     detect_text_encoding,
     get_changed_values,
     read_json_object,
+    sanitize_file_component,
 )
 
 
@@ -137,6 +138,43 @@ class TrainerRepositoryTests(unittest.TestCase):
         self.assertEqual(raw_payload["values"], values)
         self.assertEqual(raw_payload["schema_version"], 1)
 
+    def test_recent_presets_keep_latest_existing_entries(self) -> None:
+        first_preset = self.settings_dir / "preset-a.json"
+        second_preset = self.settings_dir / "preset-b.json"
+        self.repository.export_preset(first_preset, "GameXishu_Template.json", {"ExpRatio": 3})
+        self.repository.export_preset(second_preset, "GameXishu_Template.json", {"ExpRatio": 4})
+
+        self.repository.record_recent_preset(first_preset, "GameXishu_Template.json", "导出")
+        self.repository.record_recent_preset(second_preset, "GameXishu_Template.json", "导入")
+        recent_entries = self.repository.list_recent_presets(limit=5)
+
+        self.assertEqual([entry.path.name for entry in recent_entries], ["preset-b.json", "preset-a.json"])
+        self.assertEqual(recent_entries[0].action, "导入")
+
+        second_preset.unlink()
+        filtered_entries = self.repository.list_recent_presets(limit=5)
+        self.assertEqual([entry.path.name for entry in filtered_entries], ["preset-a.json"])
+
+    def test_create_and_list_snapshots(self) -> None:
+        first_snapshot = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 2},
+            "开荒档",
+        )
+        second_snapshot = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 6, "JingShenNoXiaoHao": 1},
+            "毕业档",
+        )
+
+        loaded_snapshot = self.repository.load_snapshot(first_snapshot)
+        listed_snapshots = self.repository.list_snapshots("GameXishu_Template.json", limit=5)
+
+        self.assertEqual(loaded_snapshot.snapshot_name, "开荒档")
+        self.assertEqual(loaded_snapshot.values["ExpRatio"], 2)
+        self.assertEqual([snapshot.path.name for snapshot in listed_snapshots], [second_snapshot.name, first_snapshot.name])
+        self.assertEqual(listed_snapshots[0].snapshot_name, "毕业档")
+
 
 class EncodingTests(unittest.TestCase):
     def test_detect_utf16_bom(self) -> None:
@@ -168,6 +206,10 @@ class ValueDiffTests(unittest.TestCase):
         self.assertEqual(diff[1].key, "NewField")
         self.assertIsNone(diff[1].before)
         self.assertEqual(diff[1].after, 9)
+
+    def test_sanitize_file_component_replaces_windows_unsafe_characters(self) -> None:
+        sanitized = sanitize_file_component('毕业档: Build/Final?*', 'snapshot')
+        self.assertEqual(sanitized, "毕业档_ Build_Final__")
 
 
 if __name__ == "__main__":

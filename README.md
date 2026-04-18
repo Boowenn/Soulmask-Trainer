@@ -15,7 +15,11 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Export only the unsaved changes as a lightweight preset
 - Import a preset JSON and apply it to the current template
 - Preview preset differences before importing
+- Remember recently imported/exported presets for one-click reuse
 - Batch-apply the current setup to multiple templates in one pass
+- Save the current template as a named snapshot
+- Compare the current setup with a saved snapshot before restoring it
+- Open a simple preset/snapshot center for reuse workflows
 - Filter the full parameter list down to changed items only
 - Undo all unsaved edits for the current template in one click
 - Dedicated "经验与等级" tab with quick presets
@@ -53,3 +57,5 @@ The packaged executable is written to `dist/SoulmaskTrainer.exe`.
 
 - The game ships a mix of UTF-8 and UTF-16 JSON files. The editor preserves the source encoding when saving.
 - Backups are stored under `WS\Config\GameplaySettings\_SoulmaskTrainerBackup`.
+- Snapshots are stored under `WS\Config\GameplaySettings\_SoulmaskTrainerSnapshots`.
+- Recent preset history is stored in `WS\Config\GameplaySettings\_SoulmaskTrainerRecentPresets.json`.

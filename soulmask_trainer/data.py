@@ -11,6 +11,9 @@ from typing import Any
 PROFILE_PREFIX = "GameXishu_Template"
 CONFIG_PREFIX = "GameXishuConfig_Template"
 BACKUP_DIRECTORY_NAME = "_SoulmaskTrainerBackup"
+SNAPSHOT_DIRECTORY_NAME = "_SoulmaskTrainerSnapshots"
+RECENT_PRESETS_FILE_NAME = "_SoulmaskTrainerRecentPresets.json"
+MAX_RECENT_PRESETS = 8
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,23 @@ class ValueDiff:
     after: Any
 
 
+@dataclass(frozen=True)
+class RecentPresetEntry:
+    path: Path
+    source_profile: str
+    action: str
+    recorded_at: str
+
+
+@dataclass(frozen=True)
+class SnapshotData:
+    path: Path
+    source_profile: str
+    snapshot_name: str
+    created_at: str
+    values: dict[str, Any]
+
+
 class TrainerDataError(RuntimeError):
     """Raised when Soulmask gameplay settings cannot be loaded or saved."""
 
@@ -67,6 +87,11 @@ def build_value_diff(current_values: dict[str, Any], incoming_values: dict[str, 
         for key, value in incoming_values.items()
         if current_values.get(key) != value
     ]
+
+
+def sanitize_file_component(value: str, fallback: str) -> str:
+    cleaned = "".join("_" if char in '<>:"/\\|?*' else char for char in value).strip().strip(".")
+    return (cleaned[:80] or fallback).strip()
 
 
 def detect_text_encoding(path: Path) -> str:
@@ -95,6 +120,16 @@ def write_json_object(path: Path, data: dict[str, Any], encoding: str) -> None:
 class TrainerRepository:
     def __init__(self, settings_dir: Path) -> None:
         self.settings_dir = settings_dir
+
+    def recent_presets_path(self) -> Path:
+        return self.settings_dir / RECENT_PRESETS_FILE_NAME
+
+    def snapshots_root(self) -> Path:
+        return self.settings_dir / SNAPSHOT_DIRECTORY_NAME
+
+    def snapshots_dir_for(self, source_profile: str) -> Path:
+        profile_stem = sanitize_file_component(Path(source_profile).stem, "profile")
+        return self.snapshots_root() / profile_stem
 
     @staticmethod
     def discover_settings_dir(start_dir: Path | None = None) -> Path | None:
@@ -247,6 +282,148 @@ class TrainerRepository:
         if isinstance(payload, dict):
             return PresetData(source_profile=preset_path.stem, values=dict(payload))
         raise TrainerDataError(f"Preset file format is invalid: {preset_path}")
+
+    def list_recent_presets(self, limit: int = 5) -> list[RecentPresetEntry]:
+        recent_path = self.recent_presets_path()
+        if not recent_path.is_file():
+            return []
+
+        payload = json.loads(recent_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            raw_items = payload.get("items", [])
+        elif isinstance(payload, list):
+            raw_items = payload
+        else:
+            return []
+
+        if not isinstance(raw_items, list):
+            return []
+
+        entries: list[RecentPresetEntry] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+
+            raw_path = raw_item.get("path")
+            if not isinstance(raw_path, str):
+                continue
+
+            path = Path(raw_path)
+            if not path.is_absolute():
+                path = (self.settings_dir / path).resolve()
+            if not path.is_file():
+                continue
+
+            entries.append(
+                RecentPresetEntry(
+                    path=path,
+                    source_profile=str(raw_item.get("source_profile") or path.stem),
+                    action=str(raw_item.get("action") or "最近使用"),
+                    recorded_at=str(raw_item.get("recorded_at") or ""),
+                )
+            )
+            if len(entries) >= limit:
+                break
+
+        return entries
+
+    def record_recent_preset(self, preset_path: Path, source_profile: str, action: str) -> list[RecentPresetEntry]:
+        resolved_path = preset_path.resolve()
+        existing_entries = [
+            entry
+            for entry in self.list_recent_presets(limit=MAX_RECENT_PRESETS)
+            if entry.path.resolve() != resolved_path
+        ]
+        recorded_at = datetime.now().isoformat(timespec="seconds")
+        updated_entries = [
+            RecentPresetEntry(
+                path=resolved_path,
+                source_profile=source_profile,
+                action=action,
+                recorded_at=recorded_at,
+            ),
+            *existing_entries,
+        ][:MAX_RECENT_PRESETS]
+
+        payload = {
+            "schema_version": 1,
+            "items": [
+                {
+                    "path": str(entry.path),
+                    "source_profile": entry.source_profile,
+                    "action": entry.action,
+                    "recorded_at": entry.recorded_at,
+                }
+                for entry in updated_entries
+            ],
+        }
+        self.recent_presets_path().write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return updated_entries
+
+    def create_snapshot(
+        self,
+        source_profile: str,
+        values: dict[str, Any],
+        snapshot_name: str | None = None,
+    ) -> Path:
+        timestamp = datetime.now()
+        snapshot_dir = self.snapshots_dir_for(source_profile)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        display_name = (snapshot_name or "").strip() or "当前配置"
+        safe_name = sanitize_file_component(display_name, "snapshot")
+        snapshot_path = snapshot_dir / f"{timestamp.strftime('%Y%m%d-%H%M%S-%f')}-{safe_name}.json"
+        payload = {
+            "schema_version": 1,
+            "kind": "snapshot",
+            "created_at": timestamp.isoformat(timespec="seconds"),
+            "source_profile": source_profile,
+            "snapshot_name": display_name,
+            "values": values,
+        }
+        snapshot_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return snapshot_path
+
+    def load_snapshot(self, snapshot_path: Path) -> SnapshotData:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise TrainerDataError(f"Snapshot file format is invalid: {snapshot_path}")
+
+        raw_values = payload.get("values")
+        if not isinstance(raw_values, dict):
+            raise TrainerDataError(f"Snapshot values are invalid: {snapshot_path}")
+
+        snapshot_name = str(payload.get("snapshot_name") or snapshot_path.stem)
+        source_profile = str(payload.get("source_profile") or snapshot_path.parent.name)
+        created_at = str(payload.get("created_at") or "")
+        return SnapshotData(
+            path=snapshot_path,
+            source_profile=source_profile,
+            snapshot_name=snapshot_name,
+            created_at=created_at,
+            values=dict(raw_values),
+        )
+
+    def list_snapshots(self, source_profile: str, limit: int = 10) -> list[SnapshotData]:
+        snapshot_dir = self.snapshots_dir_for(source_profile)
+        if not snapshot_dir.is_dir():
+            return []
+
+        snapshots: list[SnapshotData] = []
+        for snapshot_path in sorted(snapshot_dir.glob("*.json"), reverse=True):
+            try:
+                snapshots.append(self.load_snapshot(snapshot_path))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError, TrainerDataError):
+                continue
+            if len(snapshots) >= limit:
+                break
+        return snapshots
 
     def restore_latest_backup(self, profile_name: str) -> Path:
         latest_backup = self.latest_backup_for(profile_name)

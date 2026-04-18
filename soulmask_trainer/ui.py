@@ -4,15 +4,16 @@ from dataclasses import dataclass
 import json
 import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from pathlib import Path
 from typing import Any
 
 from soulmask_trainer.catalog import EASY_FIELDS, EASY_PRESETS, EasyPreset, MODULES, ModuleDefinition, ModulePreset, normalize_preset_value
 from soulmask_trainer.data import (
     LoadedProfile,
-    PresetData,
+    RecentPresetEntry,
     SettingMeta,
+    SnapshotData,
     TrainerDataError,
     TrainerRepository,
     ValueDiff,
@@ -271,14 +272,24 @@ class SoulmaskTrainerApp(tk.Tk):
         )
         ttk.Button(
             change_frame,
+            text="保存当前快照",
+            command=self._save_snapshot,
+        ).grid(row=0, column=1, padx=(12, 0))
+        ttk.Button(
+            change_frame,
             text="撤销未保存修改",
             command=self._reset_unsaved_changes,
-        ).grid(row=0, column=1, padx=(12, 0))
+        ).grid(row=0, column=2, padx=(8, 0))
         ttk.Button(
             change_frame,
             text="只导出改动项",
             command=lambda: self._export_preset(changed_only=True),
-        ).grid(row=0, column=2, padx=(8, 0))
+        ).grid(row=0, column=3, padx=(8, 0))
+        ttk.Button(
+            change_frame,
+            text="预设/快照中心",
+            command=self._open_reuse_center,
+        ).grid(row=0, column=4, padx=(8, 0))
 
         preset_frame = ttk.LabelFrame(easy_tab, text="一键组合", padding=10)
         preset_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
@@ -444,6 +455,26 @@ class SoulmaskTrainerApp(tk.Tk):
             return f"{value:.4f}".rstrip("0").rstrip(".")
         return str(value)
 
+    @staticmethod
+    def _format_timestamp(timestamp: str) -> str:
+        if not timestamp:
+            return "-"
+        return timestamp.replace("T", " ")
+
+    def _format_recent_preset_entry(self, entry: RecentPresetEntry) -> str:
+        return (
+            f"[{entry.action}] {entry.path.name}"
+            f" | 模板: {entry.source_profile}"
+            f" | 时间: {self._format_timestamp(entry.recorded_at)}"
+        )
+
+    def _format_snapshot_entry(self, snapshot: SnapshotData) -> str:
+        return (
+            f"{snapshot.snapshot_name}"
+            f" | {self._format_timestamp(snapshot.created_at)}"
+            f" | {len(snapshot.values)} 项"
+        )
+
     def _reset_field(self, key: str) -> None:
         state = self.field_states[key]
         if state.meta.is_toggle:
@@ -574,24 +605,31 @@ class SoulmaskTrainerApp(tk.Tk):
                 raise TrainerDataError(f"预设字段 {key} 的值无效: {value}") from error
         return normalized_values, skipped_keys
 
-    def _format_diff_line(self, diff: ValueDiff) -> str:
+    def _format_diff_line(
+        self,
+        diff: ValueDiff,
+        before_label: str = "当前",
+        after_label: str = "导入后",
+    ) -> str:
         state = self.field_states.get(diff.key)
         label = state.meta.label if state is not None else diff.key
         return (
             f"{label} ({diff.key})"
-            f" | 当前: {self._format_value(diff.before)}"
-            f" -> 导入后: {self._format_value(diff.after)}"
+            f" | {before_label}: {self._format_value(diff.before)}"
+            f" -> {after_label}: {self._format_value(diff.after)}"
         )
 
-    def _open_import_preview_dialog(
+    def _open_apply_preview_dialog(
         self,
-        preset: PresetData,
+        source_name: str,
         normalized_values: dict[str, Any],
         diff_items: list[ValueDiff],
         skipped_keys: list[str],
+        source_kind: str,
+        source_path: Path | None = None,
     ) -> None:
         dialog = tk.Toplevel(self)
-        dialog.title("导入预设预览")
+        dialog.title("导入预览" if source_kind == "预设" else "套用快照预览")
         dialog.geometry("760x520")
         dialog.transient(self)
         dialog.grab_set()
@@ -599,7 +637,7 @@ class SoulmaskTrainerApp(tk.Tk):
         dialog.rowconfigure(1, weight=1)
 
         summary_lines = [
-            f"来源预设: {preset.source_profile}",
+            f"来源: {source_name}",
             f"可识别字段: {len(normalized_values)} 项",
             f"即将改动: {len(diff_items)} 项",
         ]
@@ -638,21 +676,112 @@ class SoulmaskTrainerApp(tk.Tk):
         ttk.Button(action_frame, text="取消", command=dialog.destroy).grid(row=0, column=0)
         ttk.Button(
             action_frame,
-            text="确认导入",
-            command=lambda: self._confirm_import_preset(dialog, preset, normalized_values, skipped_keys),
+            text="确认导入" if source_kind == "预设" else "确认套用",
+            command=lambda: self._confirm_apply_values(
+                dialog,
+                source_name,
+                normalized_values,
+                skipped_keys,
+                source_kind,
+                source_path,
+            ),
         ).grid(row=0, column=1, padx=(8, 0))
 
-    def _confirm_import_preset(
+    def _confirm_apply_values(
         self,
         dialog: tk.Toplevel,
-        preset: PresetData,
+        source_name: str,
         normalized_values: dict[str, Any],
         skipped_keys: list[str],
+        source_kind: str,
+        source_path: Path | None = None,
     ) -> None:
         updated_count = self._apply_values_to_fields(normalized_values)
         dialog.destroy()
         skipped_text = f"，忽略 {len(skipped_keys)} 个不适用字段" if skipped_keys else ""
-        self.status_var.set(f"已导入预设“{preset.source_profile}”，更新 {updated_count} 个字段{skipped_text}。")
+        if self.repository is not None and source_kind == "预设" and source_path is not None:
+            try:
+                self.repository.record_recent_preset(source_path, source_name, "导入")
+            except OSError:
+                pass
+
+        if source_kind == "预设":
+            self.status_var.set(f"已导入预设“{source_name}”，更新 {updated_count} 个字段{skipped_text}。")
+        else:
+            self.status_var.set(f"已套用快照“{source_name}”，更新 {updated_count} 个字段{skipped_text}。")
+
+    def _open_snapshot_compare_dialog(self, snapshot: SnapshotData, diff_items: list[ValueDiff]) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("快照差异预览")
+        dialog.geometry("760x520")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(1, weight=1)
+
+        summary_lines = [
+            f"快照名称: {snapshot.snapshot_name}",
+            f"创建时间: {self._format_timestamp(snapshot.created_at)}",
+            f"与当前差异: {len(diff_items)} 项",
+        ]
+        ttk.Label(
+            dialog,
+            text="\n".join(summary_lines),
+            justify="left",
+            padding=(12, 12, 12, 0),
+        ).grid(row=0, column=0, sticky="ew")
+
+        list_frame = ttk.Frame(dialog, padding=12)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        listbox = tk.Listbox(list_frame)
+        listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        listbox.configure(yscrollcommand=scrollbar.set)
+
+        for diff in diff_items:
+            listbox.insert(tk.END, self._format_diff_line(diff, before_label="快照", after_label="当前"))
+
+        action_frame = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        action_frame.grid(row=2, column=0, sticky="ew")
+        ttk.Button(action_frame, text="关闭", command=dialog.destroy).grid(row=0, column=0)
+        ttk.Button(
+            action_frame,
+            text="从此快照恢复",
+            command=lambda: self._apply_snapshot_from_data(dialog, snapshot),
+        ).grid(row=0, column=1, padx=(8, 0))
+
+    def _apply_snapshot_from_data(self, dialog: tk.Toplevel | None, snapshot: SnapshotData) -> None:
+        try:
+            current_values = self._collect_values()
+            normalized_values, skipped_keys = self._normalize_preset_values(snapshot.values)
+            diff_items = build_value_diff(current_values, normalized_values)
+        except (TrainerDataError, OSError, ValueError, json.JSONDecodeError) as error:
+            messagebox.showerror("套用快照失败", str(error))
+            self.status_var.set(str(error))
+            return
+
+        if not normalized_values:
+            messagebox.showinfo("没有可套用的字段", "这个快照与当前模板不匹配。")
+            self.status_var.set("快照没有可应用到当前模板的字段。")
+            return
+        if not diff_items:
+            messagebox.showinfo("快照没有变化", "这个快照与当前数值一致。")
+            self.status_var.set("快照没有带来新的改动。")
+            return
+
+        if dialog is not None:
+            dialog.destroy()
+        self._open_apply_preview_dialog(
+            snapshot.snapshot_name,
+            normalized_values,
+            diff_items,
+            skipped_keys,
+            source_kind="快照",
+        )
 
     def _collect_values(self) -> dict[str, Any]:
         if self.loaded_profile is None:
@@ -710,7 +839,7 @@ class SoulmaskTrainerApp(tk.Tk):
 
         try:
             values = self._collect_changed_values() if changed_only else self._collect_values()
-        except TrainerDataError as error:
+        except (TrainerDataError, OSError) as error:
             messagebox.showerror("导出失败", str(error))
             self.status_var.set(str(error))
             return
@@ -733,6 +862,14 @@ class SoulmaskTrainerApp(tk.Tk):
 
         try:
             self.repository.export_preset(Path(destination), self.loaded_profile.profile_path.name, values)
+            try:
+                self.repository.record_recent_preset(
+                    Path(destination),
+                    self.loaded_profile.profile_path.name,
+                    "导出",
+                )
+            except OSError:
+                pass
         except TrainerDataError as error:
             messagebox.showerror("导出失败", str(error))
             self.status_var.set(str(error))
@@ -755,8 +892,14 @@ class SoulmaskTrainerApp(tk.Tk):
         if not source:
             return
 
+        self._import_preset_from_path(Path(source))
+
+    def _import_preset_from_path(self, preset_path: Path) -> None:
+        if self.repository is None or self.loaded_profile is None:
+            return
+
         try:
-            preset = self.repository.import_preset(Path(source))
+            preset = self.repository.import_preset(preset_path)
             current_values = self._collect_values()
             normalized_values, skipped_keys = self._normalize_preset_values(preset.values)
             diff_items = build_value_diff(current_values, normalized_values)
@@ -775,7 +918,169 @@ class SoulmaskTrainerApp(tk.Tk):
             self.status_var.set(f"预设没有带来新的改动{ignored_text}。")
             return
 
-        self._open_import_preview_dialog(preset, normalized_values, diff_items, skipped_keys)
+        self._open_apply_preview_dialog(
+            preset.source_profile,
+            normalized_values,
+            diff_items,
+            skipped_keys,
+            source_kind="预设",
+            source_path=preset_path,
+        )
+
+    def _save_snapshot(self) -> Path | None:
+        if self.repository is None or self.loaded_profile is None:
+            return None
+
+        try:
+            values = self._collect_values()
+        except (TrainerDataError, OSError) as error:
+            messagebox.showerror("保存快照失败", str(error))
+            self.status_var.set(str(error))
+            return None
+
+        snapshot_name = simpledialog.askstring(
+            "保存当前快照",
+            "给这次快照起个名字，可留空自动命名：",
+            parent=self,
+        )
+        if snapshot_name is None:
+            return None
+
+        try:
+            snapshot_path = self.repository.create_snapshot(
+                self.loaded_profile.profile_path.name,
+                values,
+                snapshot_name=snapshot_name or None,
+            )
+        except TrainerDataError as error:
+            messagebox.showerror("保存快照失败", str(error))
+            self.status_var.set(str(error))
+            return None
+
+        self.status_var.set(f"已保存当前快照到 {snapshot_path}。")
+        return snapshot_path
+
+    def _open_reuse_center(self) -> None:
+        if self.repository is None or self.loaded_profile is None:
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("预设 / 快照中心")
+        dialog.geometry("980x560")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.columnconfigure(0, weight=1)
+        dialog.columnconfigure(1, weight=1)
+        dialog.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            dialog,
+            text="这里集中管理最近预设和当前模板快照。双击列表项也可以直接操作。",
+            justify="left",
+            padding=(12, 12, 12, 0),
+        ).grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        recent_presets: list[RecentPresetEntry] = []
+        snapshots: list[SnapshotData] = []
+
+        preset_frame = ttk.LabelFrame(dialog, text="最近预设", padding=12)
+        preset_frame.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=12)
+        preset_frame.columnconfigure(0, weight=1)
+        preset_frame.rowconfigure(0, weight=1)
+
+        preset_listbox = tk.Listbox(preset_frame)
+        preset_listbox.grid(row=0, column=0, sticky="nsew")
+        preset_scrollbar = ttk.Scrollbar(preset_frame, orient="vertical", command=preset_listbox.yview)
+        preset_scrollbar.grid(row=0, column=1, sticky="ns")
+        preset_listbox.configure(yscrollcommand=preset_scrollbar.set)
+
+        preset_action_frame = ttk.Frame(preset_frame)
+        preset_action_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+        snapshot_frame = ttk.LabelFrame(dialog, text="当前模板快照", padding=12)
+        snapshot_frame.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=12)
+        snapshot_frame.columnconfigure(0, weight=1)
+        snapshot_frame.rowconfigure(0, weight=1)
+
+        snapshot_listbox = tk.Listbox(snapshot_frame)
+        snapshot_listbox.grid(row=0, column=0, sticky="nsew")
+        snapshot_scrollbar = ttk.Scrollbar(snapshot_frame, orient="vertical", command=snapshot_listbox.yview)
+        snapshot_scrollbar.grid(row=0, column=1, sticky="ns")
+        snapshot_listbox.configure(yscrollcommand=snapshot_scrollbar.set)
+
+        snapshot_action_frame = ttk.Frame(snapshot_frame)
+        snapshot_action_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+        def refresh_lists() -> None:
+            nonlocal recent_presets, snapshots
+            recent_presets = self.repository.list_recent_presets(limit=10)
+            snapshots = self.repository.list_snapshots(self.loaded_profile.profile_path.name, limit=12)
+
+            preset_listbox.delete(0, tk.END)
+            for entry in recent_presets:
+                preset_listbox.insert(tk.END, self._format_recent_preset_entry(entry))
+            if not recent_presets:
+                preset_listbox.insert(tk.END, "暂无最近预设。先导出或导入一次预设即可出现在这里。")
+
+            snapshot_listbox.delete(0, tk.END)
+            for snapshot in snapshots:
+                snapshot_listbox.insert(tk.END, self._format_snapshot_entry(snapshot))
+            if not snapshots:
+                snapshot_listbox.insert(tk.END, "当前模板还没有快照。点击下方按钮先保存一个。")
+
+        def apply_selected_preset() -> None:
+            selection = preset_listbox.curselection()
+            if not selection or not recent_presets:
+                messagebox.showwarning("未选择预设", "请先选择一个最近预设。", parent=dialog)
+                return
+            selected_entry = recent_presets[selection[0]]
+            self._import_preset_from_path(selected_entry.path)
+
+        def compare_selected_snapshot() -> None:
+            selection = snapshot_listbox.curselection()
+            if not selection or not snapshots:
+                messagebox.showwarning("未选择快照", "请先选择一个快照。", parent=dialog)
+                return
+            selected_snapshot = snapshots[selection[0]]
+            try:
+                current_values = self._collect_values()
+            except TrainerDataError as error:
+                messagebox.showerror("对比失败", str(error), parent=dialog)
+                self.status_var.set(str(error))
+                return
+
+            diff_items = build_value_diff(selected_snapshot.values, current_values)
+            if not diff_items:
+                messagebox.showinfo("没有差异", "当前数值与这个快照完全一致。", parent=dialog)
+                self.status_var.set("当前数值与所选快照一致。")
+                return
+
+            self._open_snapshot_compare_dialog(selected_snapshot, diff_items)
+
+        def apply_selected_snapshot() -> None:
+            selection = snapshot_listbox.curselection()
+            if not selection or not snapshots:
+                messagebox.showwarning("未选择快照", "请先选择一个快照。", parent=dialog)
+                return
+            self._apply_snapshot_from_data(dialog, snapshots[selection[0]])
+
+        def save_snapshot_and_refresh() -> None:
+            snapshot_path = self._save_snapshot()
+            if snapshot_path is not None:
+                refresh_lists()
+
+        ttk.Button(preset_action_frame, text="套用选中预设", command=apply_selected_preset).grid(row=0, column=0)
+        ttk.Button(preset_action_frame, text="刷新列表", command=refresh_lists).grid(row=0, column=1, padx=(8, 0))
+
+        ttk.Button(snapshot_action_frame, text="保存当前快照", command=save_snapshot_and_refresh).grid(row=0, column=0)
+        ttk.Button(snapshot_action_frame, text="对比当前", command=compare_selected_snapshot).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="套用选中快照", command=apply_selected_snapshot).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="刷新列表", command=refresh_lists).grid(row=0, column=3, padx=(8, 0))
+
+        preset_listbox.bind("<Double-Button-1>", lambda _event: apply_selected_preset())
+        snapshot_listbox.bind("<Double-Button-1>", lambda _event: compare_selected_snapshot())
+
+        refresh_lists()
 
     def _open_batch_apply_dialog(self) -> None:
         if self.repository is None or self.loaded_profile is None:
