@@ -119,6 +119,28 @@ jobs:
         shell: bash
         run: find artifacts -maxdepth 3 -type f | sort
 
+      - name: Validate release assets
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          exe_files=(artifacts/**/*.exe)
+          zip_files=(artifacts/**/*.zip)
+
+          if [ ${#exe_files[@]} -eq 0 ]; then
+            echo "No .exe artifact was downloaded."
+            exit 1
+          fi
+
+          if [ ${#zip_files[@]} -eq 0 ]; then
+            echo "No .zip artifact was downloaded."
+            exit 1
+          fi
+
+          printf 'EXE assets:\n'
+          printf '  %s\n' "${exe_files[@]}"
+          printf 'ZIP assets:\n'
+          printf '  %s\n' "${zip_files[@]}"
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:

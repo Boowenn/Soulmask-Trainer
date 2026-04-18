@@ -606,6 +606,18 @@ class TrainerRepository:
         )
         return self.load_snapshot(snapshot_path)
 
+    def duplicate_snapshot(self, snapshot_path: Path, snapshot_name: str | None = None) -> Path:
+        snapshot = self.load_snapshot(snapshot_path)
+        duplicate_name = (snapshot_name or "").strip() or f"{snapshot.snapshot_name}-copy"
+        return self.create_snapshot(
+            snapshot.source_profile,
+            snapshot.values,
+            snapshot_name=duplicate_name,
+            snapshot_note=snapshot.snapshot_note,
+            snapshot_category=snapshot.snapshot_category,
+            is_favorite=snapshot.is_favorite,
+        )
+
     def delete_snapshot(self, snapshot_path: Path) -> None:
         if not snapshot_path.is_file():
             raise TrainerDataError(f"Snapshot does not exist: {snapshot_path}")

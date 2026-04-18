@@ -300,6 +300,41 @@ class TrainerRepositoryTests(unittest.TestCase):
         self.assertEqual(renamed_snapshot.snapshot_category, "Builds")
         self.assertTrue(renamed_snapshot.is_favorite)
 
+    def test_duplicate_snapshot_preserves_metadata_and_values(self) -> None:
+        snapshot_path = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 7, "JingShenNoXiaoHao": 1},
+            "Boss Prep",
+            "Before final push",
+            "Boss",
+            True,
+        )
+
+        duplicate_path = self.repository.duplicate_snapshot(snapshot_path)
+        original_snapshot = self.repository.load_snapshot(snapshot_path)
+        duplicate_snapshot = self.repository.load_snapshot(duplicate_path)
+
+        self.assertNotEqual(duplicate_path, snapshot_path)
+        self.assertTrue(duplicate_path.is_file())
+        self.assertEqual(duplicate_snapshot.snapshot_name, "Boss Prep-copy")
+        self.assertEqual(duplicate_snapshot.snapshot_note, original_snapshot.snapshot_note)
+        self.assertEqual(duplicate_snapshot.snapshot_category, original_snapshot.snapshot_category)
+        self.assertEqual(duplicate_snapshot.is_favorite, original_snapshot.is_favorite)
+        self.assertEqual(duplicate_snapshot.values, original_snapshot.values)
+
+    def test_duplicate_snapshot_supports_custom_name(self) -> None:
+        snapshot_path = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 2},
+            "Starter Build",
+        )
+
+        duplicate_path = self.repository.duplicate_snapshot(snapshot_path, "Arena Retry")
+        duplicate_snapshot = self.repository.load_snapshot(duplicate_path)
+
+        self.assertEqual(duplicate_snapshot.snapshot_name, "Arena Retry")
+        self.assertEqual(duplicate_snapshot.values["ExpRatio"], 2)
+
 
 class EncodingTests(unittest.TestCase):
     def test_detect_utf16_bom(self) -> None:

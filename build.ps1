@@ -22,6 +22,9 @@ python -m PyInstaller `
     --onefile `
     --windowed `
     --name SoulmaskTrainer `
+    --icon assets\app-icon.ico `
+    --add-data "assets\app-icon.ico;assets" `
+    --add-data "assets\app-icon.png;assets" `
     main.py
 
 New-Item -ItemType Directory -Force release | Out-Null

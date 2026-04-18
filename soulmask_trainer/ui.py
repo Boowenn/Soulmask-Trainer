@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import subprocess
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from pathlib import Path
@@ -20,6 +21,7 @@ from soulmask_trainer.data import (
     build_full_value_diff,
     build_value_diff,
     get_changed_values,
+    sanitize_file_component,
     snapshot_matches_keyword,
 )
 
@@ -69,6 +71,7 @@ class SoulmaskTrainerApp(tk.Tk):
         self.status_var = tk.StringVar(value="等待加载 GameplaySettings 目录。")
         self.summary_var = tk.StringVar(value="未加载配置文件。")
         self.change_summary_var = tk.StringVar(value="当前没有未保存改动。")
+        self._window_icon: tk.PhotoImage | None = None
 
         self.profile_combo: ttk.Combobox | None = None
         self.notebook: ttk.Notebook | None = None
@@ -76,12 +79,36 @@ class SoulmaskTrainerApp(tk.Tk):
         self.searchable_rows: dict[str, ttk.Frame] = {}
         self._change_refresh_pending = False
 
+        self._apply_window_icon()
         self._build_layout()
         self._try_autoload()
 
+    def _asset_path(self, relative_path: str) -> Path:
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+        return base_dir / relative_path
+
+    def _apply_window_icon(self) -> None:
+        icon_path = self._asset_path("assets/app-icon.ico")
+        if icon_path.is_file():
+            try:
+                self.iconbitmap(default=str(icon_path))
+                return
+            except tk.TclError:
+                pass
+
+        png_icon_path = self._asset_path("assets/app-icon.png")
+        if not png_icon_path.is_file():
+            return
+
+        try:
+            self._window_icon = tk.PhotoImage(file=str(png_icon_path))
+            self.iconphoto(True, self._window_icon)
+        except tk.TclError:
+            self._window_icon = None
+
     def _build_layout(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
 
         toolbar = ttk.Frame(self, padding=12)
         toolbar.grid(row=0, column=0, sticky="ew")
@@ -107,17 +134,39 @@ class SoulmaskTrainerApp(tk.Tk):
         self.profile_combo.grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(10, 0))
         self.profile_combo.bind("<<ComboboxSelected>>", lambda _event: self._load_selected_profile())
         ttk.Button(toolbar, text="重新载入", command=self._load_selected_profile).grid(row=1, column=2, pady=(10, 0))
-        ttk.Button(toolbar, text="保存", command=self._save_profile).grid(row=1, column=3, pady=(10, 0), padx=(0, 8))
+        ttk.Button(toolbar, text="保存到游戏", command=self._save_profile).grid(row=1, column=3, pady=(10, 0), padx=(0, 8))
         ttk.Button(toolbar, text="恢复最近备份", command=self._restore_profile).grid(row=1, column=4, pady=(10, 0))
-        ttk.Button(toolbar, text="导出预设", command=self._export_preset).grid(row=2, column=2, pady=(10, 0))
-        ttk.Button(toolbar, text="导入预设", command=self._import_preset).grid(row=2, column=3, pady=(10, 0), padx=(0, 8))
-        ttk.Button(toolbar, text="批量应用", command=self._open_batch_apply_dialog).grid(row=2, column=4, pady=(10, 0))
+        ttk.Label(toolbar, text="复用操作").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        ttk.Button(toolbar, text="打开预设/快照中心", command=self._open_reuse_center).grid(
+            row=2,
+            column=1,
+            sticky="w",
+            padx=(8, 8),
+            pady=(10, 0),
+        )
+        ttk.Button(toolbar, text="导出当前预设", command=self._export_preset).grid(row=2, column=2, pady=(10, 0))
+        ttk.Button(toolbar, text="导入现成预设", command=self._import_preset).grid(row=2, column=3, pady=(10, 0), padx=(0, 8))
+        ttk.Button(toolbar, text="批量套用", command=self._open_batch_apply_dialog).grid(row=2, column=4, pady=(10, 0))
+
+        guide_frame = ttk.LabelFrame(self, text="怎么用", padding=(12, 8))
+        guide_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+        guide_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            guide_frame,
+            text=(
+                "1. 先确认上面的 GameplaySettings 路径和配置模板。"
+                " 2. 主要在“傻瓜版”里点一键组合或改常用项。"
+                " 3. 改完点“保存到游戏”。"
+                " 4. 想导入历史方案、管理快照、复制快照，就点“打开预设/快照中心”。"
+            ),
+            justify="left",
+        ).grid(row=0, column=0, sticky="ew")
 
         self.notebook = ttk.Notebook(self)
-        self.notebook.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        self.notebook.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 8))
 
         status_bar = ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(12, 6))
-        status_bar.grid(row=2, column=0, sticky="ew")
+        status_bar.grid(row=3, column=0, sticky="ew")
 
     def _try_autoload(self) -> None:
         detected = TrainerRepository.discover_settings_dir(Path.cwd())
@@ -255,17 +304,46 @@ class SoulmaskTrainerApp(tk.Tk):
 
         easy_tab = ttk.Frame(self.notebook, padding=12)
         easy_tab.columnconfigure(0, weight=1)
-        easy_tab.rowconfigure(3, weight=1)
+        easy_tab.rowconfigure(4, weight=1)
         self.notebook.add(easy_tab, text="傻瓜版")
 
         ttk.Label(
             easy_tab,
-            text="先点一个一键组合，再按需要微调下面这些常用项，最后点击顶部“保存”。",
+            text=(
+                "先在顶部选好模板，再点这里的一键组合或微调常用项；"
+                "改完点击顶部“保存到游戏”。想导入预设或管理快照，可以点顶部或这里的“打开预设/快照中心”。"
+            ),
             justify="left",
         ).grid(row=0, column=0, sticky="ew")
 
+        capability_frame = ttk.LabelFrame(easy_tab, text="这个修改器现在能改什么", padding=10)
+        capability_frame.grid(row=1, column=0, sticky="ew", pady=(10, 10))
+        capability_frame.columnconfigure(0, weight=1)
+        capability_frame.columnconfigure(1, weight=1)
+
+        capability_items = (
+            "经验与等级：升级倍率、训练经验、等级上限",
+            "战斗系统：输出、承伤、拆建筑、部分 PVP 系数",
+            "掉落与物品：采集、宝箱、怪物掉落、自动化产出",
+            "生存与恢复：生命、体力、食物、精神、气息消耗",
+            "制造与生产：制作时间、转化效率、矿场/索道/船员",
+            "建筑/NPC/动物/耐久：建造限制、招募、成长、腐坏",
+        )
+        for index, item in enumerate(capability_items):
+            ttk.Label(
+                capability_frame,
+                text=f"{index + 1}. {item}",
+                justify="left",
+            ).grid(
+                row=index // 2,
+                column=index % 2,
+                sticky="w",
+                padx=(0, 18) if index % 2 == 0 else 0,
+                pady=(0, 6),
+            )
+
         change_frame = ttk.LabelFrame(easy_tab, text="当前改动", padding=10)
-        change_frame.grid(row=1, column=0, sticky="ew", pady=(10, 10))
+        change_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         change_frame.columnconfigure(0, weight=1)
         ttk.Label(change_frame, textvariable=self.change_summary_var, justify="left").grid(
             row=0,
@@ -289,12 +367,12 @@ class SoulmaskTrainerApp(tk.Tk):
         ).grid(row=0, column=3, padx=(8, 0))
         ttk.Button(
             change_frame,
-            text="预设/快照中心",
+            text="打开预设/快照中心",
             command=self._open_reuse_center,
         ).grid(row=0, column=4, padx=(8, 0))
 
         preset_frame = ttk.LabelFrame(easy_tab, text="一键组合", padding=10)
-        preset_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        preset_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         for index, preset in enumerate(EASY_PRESETS):
             button = ttk.Button(
                 preset_frame,
@@ -311,7 +389,7 @@ class SoulmaskTrainerApp(tk.Tk):
             )
 
         content = ScrollableFrame(easy_tab)
-        content.grid(row=3, column=0, sticky="nsew")
+        content.grid(row=4, column=0, sticky="nsew")
 
         visible_fields = [
             key
@@ -1674,6 +1752,7 @@ class SoulmaskTrainerApp(tk.Tk):
         snapshot_search_var = tk.StringVar()
         snapshot_filter_var = tk.StringVar(value="全部")
         snapshot_category_var = tk.StringVar(value="全部分类")
+        snapshot_sort_var = tk.StringVar(value="最新优先")
         snapshot_hint_var = tk.StringVar(value="可按名称、备注或分类搜索。")
 
         preset_frame = ttk.LabelFrame(dialog, text="最近预设", padding=12)
@@ -1701,7 +1780,16 @@ class SoulmaskTrainerApp(tk.Tk):
         ttk.Label(filter_frame, text="搜索").grid(row=0, column=0, sticky="w")
         search_entry = ttk.Entry(filter_frame, textvariable=snapshot_search_var)
         search_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
-        ttk.Button(filter_frame, text="清空", command=lambda: snapshot_search_var.set("")).grid(row=0, column=2)
+        ttk.Label(filter_frame, text="排序").grid(row=0, column=2, sticky="e")
+        sort_combo = ttk.Combobox(
+            filter_frame,
+            state="readonly",
+            textvariable=snapshot_sort_var,
+            values=["最新优先", "最早优先", "名称排序", "收藏优先", "分类排序"],
+            width=18,
+        )
+        sort_combo.grid(row=0, column=3, sticky="w")
+        ttk.Button(filter_frame, text="清空", command=lambda: snapshot_search_var.set("")).grid(row=0, column=4, padx=(8, 0))
 
         ttk.Label(filter_frame, text="筛选").grid(row=1, column=0, sticky="w", pady=(8, 0))
         filter_combo = ttk.Combobox(
@@ -1732,7 +1820,7 @@ class SoulmaskTrainerApp(tk.Tk):
 
         ttk.Label(
             snapshot_frame,
-            text="提示：收藏适合常用方案，分类适合分场景，批量备注适合给一组快照补说明。",
+            text="提示：先在列表里选中快照，再点下面按钮。复制适合留分支版本，导出成预设适合跨模板复用。",
             foreground="#666666",
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
@@ -1778,9 +1866,45 @@ class SoulmaskTrainerApp(tk.Tk):
             if snapshot_category_var.get() not in category_values:
                 snapshot_category_var.set("全部分类")
 
+        def sort_snapshots(items: list[SnapshotData]) -> list[SnapshotData]:
+            sort_mode = snapshot_sort_var.get().strip()
+            newest_first = sorted(
+                items,
+                key=lambda snapshot: (snapshot.created_at, snapshot.snapshot_name.casefold()),
+                reverse=True,
+            )
+            if sort_mode == "最早优先":
+                return list(reversed(newest_first))
+            if sort_mode == "名称排序":
+                return sorted(
+                    newest_first,
+                    key=lambda snapshot: (
+                        snapshot.snapshot_name.casefold(),
+                        snapshot.created_at,
+                    ),
+                )
+            if sort_mode == "收藏优先":
+                return sorted(
+                    newest_first,
+                    key=lambda snapshot: (
+                        not snapshot.is_favorite,
+                        snapshot.snapshot_name.casefold(),
+                    ),
+                )
+            if sort_mode == "分类排序":
+                return sorted(
+                    newest_first,
+                    key=lambda snapshot: (
+                        snapshot.snapshot_category == "",
+                        (snapshot.snapshot_category or "未分类").casefold(),
+                        snapshot.snapshot_name.casefold(),
+                    ),
+                )
+            return newest_first
+
         def refresh_snapshot_list() -> None:
             nonlocal visible_snapshots
-            visible_snapshots = [snapshot for snapshot in snapshots if snapshot_visible(snapshot)]
+            visible_snapshots = sort_snapshots([snapshot for snapshot in snapshots if snapshot_visible(snapshot)])
 
             snapshot_listbox.delete(0, tk.END)
             for snapshot in visible_snapshots:
@@ -1800,7 +1924,7 @@ class SoulmaskTrainerApp(tk.Tk):
             category_count = sum(1 for snapshot in snapshots if snapshot.snapshot_category)
             note_count = sum(1 for snapshot in snapshots if snapshot.snapshot_note)
             snapshot_hint_var.set(
-                f"已显示 {len(visible_snapshots)} / {len(snapshots)} 个快照，收藏 {favorite_count} 个，已分类 {category_count} 个，有备注 {note_count} 个。"
+                f"已显示 {len(visible_snapshots)} / {len(snapshots)} 个快照，收藏 {favorite_count} 个，已分类 {category_count} 个，有备注 {note_count} 个，当前排序：{snapshot_sort_var.get()}。"
             )
 
         def refresh_lists() -> None:
@@ -1918,6 +2042,62 @@ class SoulmaskTrainerApp(tk.Tk):
                 return
             self._apply_snapshot_from_data(dialog, selected_items[0])
 
+        def duplicate_selected_snapshots() -> None:
+            selected_items = get_selected_snapshots(min_count=1)
+            if not selected_items:
+                return
+
+            try:
+                duplicate_paths = [self.repository.duplicate_snapshot(snapshot.path) for snapshot in selected_items]
+                duplicate_names = [self.repository.load_snapshot(path).snapshot_name for path in duplicate_paths]
+            except (TrainerDataError, OSError) as error:
+                messagebox.showerror("复制快照失败", str(error), parent=dialog)
+                self.status_var.set(str(error))
+                return
+
+            refresh_lists()
+            if len(duplicate_names) == 1:
+                self.status_var.set(f"已复制快照：{duplicate_names[0]}")
+            else:
+                self.status_var.set(f"已复制 {len(duplicate_names)} 个快照，名称已自动追加 -copy。")
+
+        def export_selected_snapshot_as_preset() -> None:
+            selected_items = get_selected_snapshots(min_count=1, max_count=1)
+            if not selected_items:
+                return
+
+            selected_snapshot = selected_items[0]
+            default_name = f"{sanitize_file_component(selected_snapshot.snapshot_name, 'snapshot')}-preset.json"
+            destination = filedialog.asksaveasfilename(
+                title="把快照导出成预设",
+                defaultextension=".json",
+                filetypes=[("JSON 文件", "*.json")],
+                initialfile=default_name,
+                initialdir=self.settings_dir_var.get() or str(Path.cwd()),
+                parent=dialog,
+            )
+            if not destination:
+                return
+
+            destination_path = Path(destination)
+            try:
+                self.repository.export_preset(destination_path, selected_snapshot.source_profile, selected_snapshot.values)
+                try:
+                    self.repository.record_recent_preset(
+                        destination_path,
+                        selected_snapshot.source_profile,
+                        "导出",
+                    )
+                except OSError:
+                    pass
+            except (TrainerDataError, OSError) as error:
+                messagebox.showerror("导出失败", str(error), parent=dialog)
+                self.status_var.set(str(error))
+                return
+
+            refresh_lists()
+            self.status_var.set(f"已把快照“{selected_snapshot.snapshot_name}”导出为预设：{destination}")
+
         def rename_selected_snapshot() -> None:
             selected_items = get_selected_snapshots(min_count=1, max_count=1)
             if not selected_items:
@@ -1961,6 +2141,7 @@ class SoulmaskTrainerApp(tk.Tk):
         snapshot_search_var.trace_add("write", lambda *_args: refresh_snapshot_list())
         snapshot_filter_var.trace_add("write", lambda *_args: refresh_snapshot_list())
         snapshot_category_var.trace_add("write", lambda *_args: refresh_snapshot_list())
+        snapshot_sort_var.trace_add("write", lambda *_args: refresh_snapshot_list())
 
         ttk.Button(preset_action_frame, text="套用选中", command=apply_selected_preset).grid(row=0, column=0)
         ttk.Button(preset_action_frame, text="移除记录", command=remove_selected_recent_preset).grid(row=0, column=1, padx=(8, 0))
@@ -1976,9 +2157,12 @@ class SoulmaskTrainerApp(tk.Tk):
 
         ttk.Button(snapshot_action_frame, text="比较两个快照", command=compare_two_snapshots).grid(row=1, column=0, pady=(8, 0))
         ttk.Button(snapshot_action_frame, text="套用选中快照", command=apply_selected_snapshot).grid(row=1, column=1, padx=(8, 0), pady=(8, 0))
-        ttk.Button(snapshot_action_frame, text="重命名快照", command=rename_selected_snapshot).grid(row=1, column=2, padx=(8, 0), pady=(8, 0))
-        ttk.Button(snapshot_action_frame, text="删除快照", command=delete_selected_snapshots).grid(row=1, column=3, padx=(8, 0), pady=(8, 0))
-        ttk.Button(snapshot_action_frame, text="刷新列表", command=refresh_lists).grid(row=1, column=4, padx=(8, 0), pady=(8, 0))
+        ttk.Button(snapshot_action_frame, text="复制快照", command=duplicate_selected_snapshots).grid(row=1, column=2, padx=(8, 0), pady=(8, 0))
+        ttk.Button(snapshot_action_frame, text="导出成预设", command=export_selected_snapshot_as_preset).grid(row=1, column=3, padx=(8, 0), pady=(8, 0))
+        ttk.Button(snapshot_action_frame, text="重命名快照", command=rename_selected_snapshot).grid(row=1, column=4, padx=(8, 0), pady=(8, 0))
+
+        ttk.Button(snapshot_action_frame, text="删除快照", command=delete_selected_snapshots).grid(row=2, column=0, pady=(8, 0))
+        ttk.Button(snapshot_action_frame, text="刷新列表", command=refresh_lists).grid(row=2, column=1, padx=(8, 0), pady=(8, 0))
 
         preset_listbox.bind("<Double-Button-1>", lambda _event: apply_selected_preset())
         snapshot_listbox.bind("<Double-Button-1>", lambda _event: compare_selected_snapshot())

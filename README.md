@@ -10,6 +10,7 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Load official `GameXishu_Template*.json` profiles
 - Read the matching `GameXishuConfig_Template*.json` metadata files
 - Beginner-friendly `傻瓜版` page with one-click combinations and a short list of common settings
+- Show a plain-language "how to use it" guide and a summary of what the trainer can change on the home page
 - Edit visible settings through a desktop UI
 - Export the current setup as a reusable JSON preset
 - Export only the unsaved changes as a lightweight preset
@@ -25,7 +26,10 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Compare two saved snapshots side by side
 - Search snapshots by name or note in the snapshot center
 - Filter snapshots by favorites, notes, categories, and keyword search
+- Sort snapshots by newest, oldest, name, favorite-first, or category
 - Batch-edit snapshot notes or categories from the snapshot center
+- Duplicate snapshots with one click for branch-style versioning
+- Export a selected snapshot directly as a reusable preset JSON
 - Rename or delete snapshots directly from the snapshot center
 - Open a simple preset/snapshot center for reuse workflows
 - Remove single recent preset records, clean invalid history, or clear the recent list
