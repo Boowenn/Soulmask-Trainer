@@ -168,6 +168,126 @@ class SoulmaskTrainerApp(tk.Tk):
         status_bar = ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(12, 6))
         status_bar.grid(row=3, column=0, sticky="ew")
 
+        self._build_home_tab()
+
+    def _build_home_tab(self, loaded_profile: LoadedProfile | None = None) -> None:
+        if self.notebook is None:
+            return
+
+        home_tab = ttk.Frame(self.notebook, padding=16)
+        home_tab.columnconfigure(0, weight=1)
+        home_tab.rowconfigure(3, weight=1)
+        self.notebook.add(home_tab, text="首页")
+
+        current_path = self.settings_dir_var.get().strip()
+        profile_name = loaded_profile.profile_path.name if loaded_profile is not None else ""
+        profile_count = 0
+        if self.profile_combo is not None:
+            profile_values = self.profile_combo.cget("values")
+            profile_count = len(profile_values) if profile_values else 0
+
+        intro_frame = ttk.LabelFrame(home_tab, text="现在该怎么做", padding=12)
+        intro_frame.grid(row=0, column=0, sticky="ew")
+        intro_frame.columnconfigure(0, weight=1)
+
+        if loaded_profile is None:
+            intro_text = (
+                "当前还没有加载成功，所以中间现在不该是空白操作区。\n"
+                "请先完成下面两步：先选 Soulmask 的 GameplaySettings 目录，再选一个配置模板。"
+            )
+        else:
+            intro_text = (
+                f"当前已加载模板：{loaded_profile.profile_path.name}\n"
+                "建议先去“傻瓜版”点一个一键组合，再按需要微调，最后点击顶部“保存到游戏”。"
+            )
+
+        ttk.Label(
+            intro_frame,
+            text=intro_text,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
+
+        action_frame = ttk.Frame(intro_frame)
+        action_frame.grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Button(action_frame, text="1. 选择游戏目录", command=self._choose_settings_dir).grid(row=0, column=0)
+        ttk.Button(action_frame, text="2. 扫描模板", command=self._refresh_profiles).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(
+            action_frame,
+            text="3. 打开傻瓜版",
+            command=lambda: self._select_tab("傻瓜版"),
+            state="normal" if loaded_profile is not None else "disabled",
+        ).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(
+            action_frame,
+            text="4. 打开预设/快照中心",
+            command=self._open_reuse_center,
+            state="normal" if loaded_profile is not None else "disabled",
+        ).grid(row=0, column=3, padx=(8, 0))
+
+        status_frame = ttk.LabelFrame(home_tab, text="当前状态", padding=12)
+        status_frame.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        status_frame.columnconfigure(1, weight=1)
+        ttk.Label(status_frame, text="目录").grid(row=0, column=0, sticky="nw")
+        ttk.Label(
+            status_frame,
+            text=current_path or "还没选。请点上面的“1. 选择游戏目录”。",
+            justify="left",
+        ).grid(row=0, column=1, sticky="w")
+        ttk.Label(status_frame, text="模板").grid(row=1, column=0, sticky="nw", pady=(8, 0))
+        ttk.Label(
+            status_frame,
+            text=profile_name or "还没加载。先扫描模板，再从顶部下拉框选择。",
+            justify="left",
+        ).grid(row=1, column=1, sticky="w", pady=(8, 0))
+        ttk.Label(status_frame, text="可用模板数").grid(row=2, column=0, sticky="nw", pady=(8, 0))
+        ttk.Label(status_frame, text=str(profile_count), justify="left").grid(row=2, column=1, sticky="w", pady=(8, 0))
+
+        capability_frame = ttk.LabelFrame(home_tab, text="这个修改器能改什么", padding=12)
+        capability_frame.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        capability_frame.columnconfigure(0, weight=1)
+        capability_frame.columnconfigure(1, weight=1)
+        capability_items = (
+            "经验与等级：升级倍率、训练经验、等级上限",
+            "战斗系统：输出、承伤、拆建筑、部分 PVP 系数",
+            "掉落与物品：采集、宝箱、怪物掉落、自动化产出",
+            "生存与恢复：生命、体力、食物、精神、气息消耗",
+            "制造与生产：制作时间、转化效率、矿场/索道/船员",
+            "建筑/NPC/动物/耐久：建造限制、招募、成长、腐坏",
+        )
+        for index, item in enumerate(capability_items):
+            ttk.Label(
+                capability_frame,
+                text=f"{index + 1}. {item}",
+                justify="left",
+            ).grid(
+                row=index // 2,
+                column=index % 2,
+                sticky="w",
+                padx=(0, 18) if index % 2 == 0 else 0,
+                pady=(0, 6),
+            )
+
+        tips_frame = ttk.LabelFrame(home_tab, text="最简单的用法", padding=12)
+        tips_frame.grid(row=3, column=0, sticky="nsew", pady=(12, 0))
+        tips_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            tips_frame,
+            text=(
+                "新手推荐路线：\n"
+                "1. 选择目录 -> 2. 选择模板 -> 3. 打开傻瓜版 -> 4. 点一个一键组合 -> 5. 保存到游戏。\n"
+                "想保留一套方案时：保存当前快照；想跨模板复用时：导出当前预设。"
+            ),
+            justify="left",
+        ).grid(row=0, column=0, sticky="nw")
+
+    def _select_tab(self, title: str) -> None:
+        if self.notebook is None:
+            return
+        for tab_id in self.notebook.tabs():
+            if self.notebook.tab(tab_id, "text") == title:
+                self.notebook.select(tab_id)
+                return
+
     def _try_autoload(self) -> None:
         detected = TrainerRepository.discover_settings_dir(Path.cwd())
         if detected is None:
@@ -256,14 +376,16 @@ class SoulmaskTrainerApp(tk.Tk):
         self._build_fields(loaded_profile)
         self.status_var.set(f"已加载 {profile_name}。")
 
-    def _clear_fields(self) -> None:
+    def _clear_fields(self, loaded_profile: LoadedProfile | None = None) -> None:
         self.field_states.clear()
         self.searchable_rows.clear()
         self.field_container = None
+        self.loaded_profile = loaded_profile
         if self.notebook is None:
             return
         for tab_id in self.notebook.tabs():
             self.notebook.forget(tab_id)
+        self._build_home_tab(loaded_profile)
 
     def _ensure_field_state(self, key: str, meta: SettingMeta, current_value: Any) -> FieldState:
         state = self.field_states.get(key)
@@ -289,7 +411,7 @@ class SoulmaskTrainerApp(tk.Tk):
         if self.notebook is None:
             return
 
-        self._clear_fields()
+        self._clear_fields(loaded_profile)
         self.search_var.set("")
         self.changed_only_var.set(False)
         self._build_easy_mode_tab(loaded_profile)
@@ -298,6 +420,7 @@ class SoulmaskTrainerApp(tk.Tk):
             self._build_module_tab(loaded_profile, module)
         self._refresh_change_summary()
         self._apply_filter()
+        self._select_tab("首页")
 
     def _build_easy_mode_tab(self, loaded_profile: LoadedProfile) -> None:
         assert self.notebook is not None
