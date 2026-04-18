@@ -67,6 +67,8 @@ class SnapshotData:
     source_profile: str
     snapshot_name: str
     snapshot_note: str
+    snapshot_category: str
+    is_favorite: bool
     created_at: str
     values: dict[str, Any]
 
@@ -110,6 +112,7 @@ def snapshot_matches_keyword(snapshot: SnapshotData, keyword: str) -> bool:
         for part in (
             snapshot.snapshot_name,
             snapshot.snapshot_note,
+            snapshot.snapshot_category,
             snapshot.created_at,
             snapshot.path.name,
         )
@@ -443,6 +446,8 @@ class TrainerRepository:
         source_profile: str,
         snapshot_name: str,
         snapshot_note: str,
+        snapshot_category: str,
+        is_favorite: bool,
         created_at: str,
         values: dict[str, Any],
     ) -> None:
@@ -453,6 +458,8 @@ class TrainerRepository:
             "source_profile": source_profile,
             "snapshot_name": snapshot_name,
             "snapshot_note": snapshot_note,
+            "snapshot_category": snapshot_category,
+            "is_favorite": is_favorite,
             "values": values,
         }
         snapshot_path.write_text(
@@ -466,6 +473,8 @@ class TrainerRepository:
         values: dict[str, Any],
         snapshot_name: str | None = None,
         snapshot_note: str | None = None,
+        snapshot_category: str | None = None,
+        is_favorite: bool = False,
     ) -> Path:
         timestamp = datetime.now()
         snapshot_dir = self.snapshots_dir_for(source_profile)
@@ -473,6 +482,7 @@ class TrainerRepository:
 
         display_name = (snapshot_name or "").strip() or "当前配置"
         display_note = (snapshot_note or "").strip()
+        display_category = (snapshot_category or "").strip()
         safe_name = sanitize_file_component(display_name, "snapshot")
         snapshot_path = snapshot_dir / f"{timestamp.strftime('%Y%m%d-%H%M%S-%f')}-{safe_name}.json"
         self._write_snapshot_payload(
@@ -480,6 +490,8 @@ class TrainerRepository:
             source_profile=source_profile,
             snapshot_name=display_name,
             snapshot_note=display_note,
+            snapshot_category=display_category,
+            is_favorite=is_favorite,
             created_at=timestamp.isoformat(timespec="seconds"),
             values=values,
         )
@@ -496,6 +508,8 @@ class TrainerRepository:
 
         snapshot_name = str(payload.get("snapshot_name") or snapshot_path.stem)
         snapshot_note = str(payload.get("snapshot_note") or "")
+        snapshot_category = str(payload.get("snapshot_category") or "")
+        is_favorite = bool(payload.get("is_favorite"))
         source_profile = str(payload.get("source_profile") or snapshot_path.parent.name)
         created_at = str(payload.get("created_at") or "")
         return SnapshotData(
@@ -503,6 +517,8 @@ class TrainerRepository:
             source_profile=source_profile,
             snapshot_name=snapshot_name,
             snapshot_note=snapshot_note,
+            snapshot_category=snapshot_category,
+            is_favorite=is_favorite,
             created_at=created_at,
             values=dict(raw_values),
         )
@@ -539,6 +555,8 @@ class TrainerRepository:
             source_profile=snapshot.source_profile,
             snapshot_name=updated_name,
             snapshot_note=snapshot.snapshot_note,
+            snapshot_category=snapshot.snapshot_category,
+            is_favorite=snapshot.is_favorite,
             created_at=snapshot.created_at,
             values=snapshot.values,
         )
@@ -553,6 +571,36 @@ class TrainerRepository:
             source_profile=snapshot.source_profile,
             snapshot_name=snapshot.snapshot_name,
             snapshot_note=snapshot_note.strip(),
+            snapshot_category=snapshot.snapshot_category,
+            is_favorite=snapshot.is_favorite,
+            created_at=snapshot.created_at,
+            values=snapshot.values,
+        )
+        return self.load_snapshot(snapshot_path)
+
+    def update_snapshot_category(self, snapshot_path: Path, snapshot_category: str) -> SnapshotData:
+        snapshot = self.load_snapshot(snapshot_path)
+        self._write_snapshot_payload(
+            snapshot_path,
+            source_profile=snapshot.source_profile,
+            snapshot_name=snapshot.snapshot_name,
+            snapshot_note=snapshot.snapshot_note,
+            snapshot_category=snapshot_category.strip(),
+            is_favorite=snapshot.is_favorite,
+            created_at=snapshot.created_at,
+            values=snapshot.values,
+        )
+        return self.load_snapshot(snapshot_path)
+
+    def set_snapshot_favorite(self, snapshot_path: Path, is_favorite: bool) -> SnapshotData:
+        snapshot = self.load_snapshot(snapshot_path)
+        self._write_snapshot_payload(
+            snapshot_path,
+            source_profile=snapshot.source_profile,
+            snapshot_name=snapshot.snapshot_name,
+            snapshot_note=snapshot.snapshot_note,
+            snapshot_category=snapshot.snapshot_category,
+            is_favorite=is_favorite,
             created_at=snapshot.created_at,
             values=snapshot.values,
         )

@@ -493,6 +493,20 @@ class SoulmaskTrainerApp(tk.Tk):
             parts.append(f"备注: {self._shorten_text(snapshot.snapshot_note)}")
         return " | ".join(parts)
 
+    def _format_snapshot_entry(self, snapshot: SnapshotData) -> str:
+        parts = [
+            snapshot.snapshot_name,
+            self._format_timestamp(snapshot.created_at),
+            f"{len(snapshot.values)} 项",
+        ]
+        if snapshot.is_favorite:
+            parts.append("收藏")
+        if snapshot.snapshot_category:
+            parts.append(f"分类: {snapshot.snapshot_category}")
+        if snapshot.snapshot_note:
+            parts.append(f"备注: {self._shorten_text(snapshot.snapshot_note)}")
+        return " | ".join(parts)
+
     def _reset_field(self, key: str) -> None:
         state = self.field_states[key]
         if state.meta.is_toggle:
@@ -874,6 +888,91 @@ class SoulmaskTrainerApp(tk.Tk):
         else:
             self.status_var.set(f"已清空快照备注：{updated_snapshot.snapshot_name}")
         return updated_snapshot
+
+    def _batch_edit_snapshot_note(
+        self,
+        snapshots: list[SnapshotData],
+        parent: tk.Misc | None = None,
+    ) -> list[SnapshotData]:
+        if self.repository is None or not snapshots:
+            return []
+
+        initial_value = snapshots[0].snapshot_note if len(snapshots) == 1 else ""
+        updated_note = simpledialog.askstring(
+            "批量备注",
+            "输入统一备注，可留空清空所选快照的备注：",
+            initialvalue=initial_value,
+            parent=parent or self,
+        )
+        if updated_note is None:
+            return []
+
+        updated_snapshots: list[SnapshotData] = []
+        try:
+            for snapshot in snapshots:
+                updated_snapshots.append(self.repository.update_snapshot_note(snapshot.path, updated_note))
+        except (TrainerDataError, OSError) as error:
+            messagebox.showerror("批量备注失败", str(error), parent=parent or self)
+            self.status_var.set(str(error))
+            return []
+
+        self.status_var.set(f"已批量更新 {len(updated_snapshots)} 个快照的备注。")
+        return updated_snapshots
+
+    def _batch_edit_snapshot_category(
+        self,
+        snapshots: list[SnapshotData],
+        parent: tk.Misc | None = None,
+    ) -> list[SnapshotData]:
+        if self.repository is None or not snapshots:
+            return []
+
+        initial_value = snapshots[0].snapshot_category if len(snapshots) == 1 else ""
+        updated_category = simpledialog.askstring(
+            "快照分类",
+            "输入分类，可留空清空分类：",
+            initialvalue=initial_value,
+            parent=parent or self,
+        )
+        if updated_category is None:
+            return []
+
+        updated_snapshots: list[SnapshotData] = []
+        try:
+            for snapshot in snapshots:
+                updated_snapshots.append(self.repository.update_snapshot_category(snapshot.path, updated_category))
+        except (TrainerDataError, OSError) as error:
+            messagebox.showerror("保存分类失败", str(error), parent=parent or self)
+            self.status_var.set(str(error))
+            return []
+
+        if updated_category.strip():
+            self.status_var.set(f"已为 {len(updated_snapshots)} 个快照设置分类：{updated_category.strip()}")
+        else:
+            self.status_var.set(f"已清空 {len(updated_snapshots)} 个快照的分类。")
+        return updated_snapshots
+
+    def _toggle_snapshot_favorite(
+        self,
+        snapshots: list[SnapshotData],
+        parent: tk.Misc | None = None,
+    ) -> list[SnapshotData]:
+        if self.repository is None or not snapshots:
+            return []
+
+        target_value = any(not snapshot.is_favorite for snapshot in snapshots)
+        updated_snapshots: list[SnapshotData] = []
+        try:
+            for snapshot in snapshots:
+                updated_snapshots.append(self.repository.set_snapshot_favorite(snapshot.path, target_value))
+        except (TrainerDataError, OSError) as error:
+            messagebox.showerror("收藏操作失败", str(error), parent=parent or self)
+            self.status_var.set(str(error))
+            return []
+
+        status_text = "已收藏" if target_value else "已取消收藏"
+        self.status_var.set(f"{status_text} {len(updated_snapshots)} 个快照。")
+        return updated_snapshots
 
     def _delete_snapshots(self, snapshots: list[SnapshotData], parent: tk.Misc | None = None) -> bool:
         if self.repository is None or not snapshots:
@@ -1546,6 +1645,344 @@ class SoulmaskTrainerApp(tk.Tk):
         preset_listbox.bind("<Double-Button-1>", lambda _event: apply_selected_preset())
         snapshot_listbox.bind("<Double-Button-1>", lambda _event: compare_selected_snapshot())
 
+        refresh_lists()
+
+    def _open_reuse_center(self) -> None:
+        if self.repository is None or self.loaded_profile is None:
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("预设 / 快照中心")
+        dialog.geometry("1180x700")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.columnconfigure(0, weight=1)
+        dialog.columnconfigure(1, weight=1)
+        dialog.rowconfigure(1, weight=1)
+
+        ttk.Label(
+            dialog,
+            text="左边整理最近预设，右边按搜索、分类、收藏状态筛选快照。单个和多个快照都能直接批量操作。",
+            justify="left",
+            padding=(12, 12, 12, 0),
+        ).grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        recent_presets: list[RecentPresetEntry] = []
+        visible_recent_presets: list[RecentPresetEntry] = []
+        snapshots: list[SnapshotData] = []
+        visible_snapshots: list[SnapshotData] = []
+        snapshot_search_var = tk.StringVar()
+        snapshot_filter_var = tk.StringVar(value="全部")
+        snapshot_category_var = tk.StringVar(value="全部分类")
+        snapshot_hint_var = tk.StringVar(value="可按名称、备注或分类搜索。")
+
+        preset_frame = ttk.LabelFrame(dialog, text="最近预设", padding=12)
+        preset_frame.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=12)
+        preset_frame.columnconfigure(0, weight=1)
+        preset_frame.rowconfigure(0, weight=1)
+
+        preset_listbox = tk.Listbox(preset_frame)
+        preset_listbox.grid(row=0, column=0, sticky="nsew")
+        preset_scrollbar = ttk.Scrollbar(preset_frame, orient="vertical", command=preset_listbox.yview)
+        preset_scrollbar.grid(row=0, column=1, sticky="ns")
+        preset_listbox.configure(yscrollcommand=preset_scrollbar.set)
+
+        preset_action_frame = ttk.Frame(preset_frame)
+        preset_action_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+        snapshot_frame = ttk.LabelFrame(dialog, text="当前模板快照", padding=12)
+        snapshot_frame.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=12)
+        snapshot_frame.columnconfigure(0, weight=1)
+        snapshot_frame.rowconfigure(3, weight=1)
+
+        filter_frame = ttk.Frame(snapshot_frame)
+        filter_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        filter_frame.columnconfigure(1, weight=1)
+        ttk.Label(filter_frame, text="搜索").grid(row=0, column=0, sticky="w")
+        search_entry = ttk.Entry(filter_frame, textvariable=snapshot_search_var)
+        search_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
+        ttk.Button(filter_frame, text="清空", command=lambda: snapshot_search_var.set("")).grid(row=0, column=2)
+
+        ttk.Label(filter_frame, text="筛选").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        filter_combo = ttk.Combobox(
+            filter_frame,
+            state="readonly",
+            textvariable=snapshot_filter_var,
+            values=["全部", "仅收藏", "仅有备注", "仅有分类"],
+        )
+        filter_combo.grid(row=1, column=1, sticky="w", padx=(8, 8), pady=(8, 0))
+
+        ttk.Label(filter_frame, text="分类").grid(row=1, column=2, sticky="e", pady=(8, 0))
+        category_combo = ttk.Combobox(
+            filter_frame,
+            state="readonly",
+            textvariable=snapshot_category_var,
+            values=["全部分类"],
+            width=20,
+        )
+        category_combo.grid(row=1, column=3, sticky="w", pady=(8, 0))
+
+        ttk.Label(snapshot_frame, textvariable=snapshot_hint_var, foreground="#666666").grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 8),
+        )
+
+        ttk.Label(
+            snapshot_frame,
+            text="提示：收藏适合常用方案，分类适合分场景，批量备注适合给一组快照补说明。",
+            foreground="#666666",
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        snapshot_listbox = tk.Listbox(snapshot_frame, selectmode=tk.EXTENDED)
+        snapshot_listbox.grid(row=3, column=0, sticky="nsew")
+        snapshot_scrollbar = ttk.Scrollbar(snapshot_frame, orient="vertical", command=snapshot_listbox.yview)
+        snapshot_scrollbar.grid(row=3, column=1, sticky="ns")
+        snapshot_listbox.configure(yscrollcommand=snapshot_scrollbar.set)
+
+        snapshot_action_frame = ttk.Frame(snapshot_frame)
+        snapshot_action_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+        def snapshot_visible(snapshot: SnapshotData) -> bool:
+            keyword = snapshot_search_var.get().strip()
+            filter_mode = snapshot_filter_var.get().strip()
+            selected_category = snapshot_category_var.get().strip()
+
+            if not snapshot_matches_keyword(snapshot, keyword):
+                return False
+            if filter_mode == "仅收藏" and not snapshot.is_favorite:
+                return False
+            if filter_mode == "仅有备注" and not snapshot.snapshot_note:
+                return False
+            if filter_mode == "仅有分类" and not snapshot.snapshot_category:
+                return False
+            if selected_category and selected_category != "全部分类" and snapshot.snapshot_category != selected_category:
+                return False
+            return True
+
+        def refresh_recent_preset_list() -> None:
+            nonlocal visible_recent_presets
+            visible_recent_presets = list(recent_presets)
+            preset_listbox.delete(0, tk.END)
+            for entry in visible_recent_presets:
+                preset_listbox.insert(tk.END, self._format_recent_preset_entry(entry))
+            if not visible_recent_presets:
+                preset_listbox.insert(tk.END, "最近预设列表为空。导出或导入过的预设会显示在这里。")
+
+        def refresh_snapshot_filters() -> None:
+            categories = sorted({snapshot.snapshot_category for snapshot in snapshots if snapshot.snapshot_category})
+            category_values = ["全部分类", *categories]
+            category_combo["values"] = category_values
+            if snapshot_category_var.get() not in category_values:
+                snapshot_category_var.set("全部分类")
+
+        def refresh_snapshot_list() -> None:
+            nonlocal visible_snapshots
+            visible_snapshots = [snapshot for snapshot in snapshots if snapshot_visible(snapshot)]
+
+            snapshot_listbox.delete(0, tk.END)
+            for snapshot in visible_snapshots:
+                snapshot_listbox.insert(tk.END, self._format_snapshot_entry(snapshot))
+
+            if not snapshots:
+                snapshot_hint_var.set("当前模板还没有快照，先保存一个就能在这里管理。")
+                snapshot_listbox.insert(tk.END, "当前模板还没有快照。")
+                return
+
+            if not visible_snapshots:
+                snapshot_hint_var.set("没有匹配的快照，试试放宽筛选条件。")
+                snapshot_listbox.insert(tk.END, "没有匹配的快照。")
+                return
+
+            favorite_count = sum(1 for snapshot in snapshots if snapshot.is_favorite)
+            category_count = sum(1 for snapshot in snapshots if snapshot.snapshot_category)
+            note_count = sum(1 for snapshot in snapshots if snapshot.snapshot_note)
+            snapshot_hint_var.set(
+                f"已显示 {len(visible_snapshots)} / {len(snapshots)} 个快照，收藏 {favorite_count} 个，已分类 {category_count} 个，有备注 {note_count} 个。"
+            )
+
+        def refresh_lists() -> None:
+            nonlocal recent_presets, snapshots
+            recent_presets = self.repository.list_recent_presets(limit=12)
+            snapshots = self.repository.list_snapshots(self.loaded_profile.profile_path.name, limit=80)
+            refresh_recent_preset_list()
+            refresh_snapshot_filters()
+            refresh_snapshot_list()
+
+        def get_selected_recent_preset() -> RecentPresetEntry | None:
+            selection = list(preset_listbox.curselection())
+            if not selection or not visible_recent_presets:
+                messagebox.showwarning("未选择预设", "请先选择一个最近预设。", parent=dialog)
+                return None
+            return visible_recent_presets[selection[0]]
+
+        def get_selected_snapshots(min_count: int = 1, max_count: int | None = None) -> list[SnapshotData]:
+            selection = list(snapshot_listbox.curselection())
+            if not selection or not visible_snapshots:
+                messagebox.showwarning("未选择快照", "请先选择快照。", parent=dialog)
+                return []
+
+            selected_items = [visible_snapshots[index] for index in selection]
+            if len(selected_items) < min_count:
+                messagebox.showwarning("选择数量不足", f"请至少选择 {min_count} 个快照。", parent=dialog)
+                return []
+            if max_count is not None and len(selected_items) > max_count:
+                messagebox.showwarning("选择过多", f"请最多选择 {max_count} 个快照。", parent=dialog)
+                return []
+            return selected_items
+
+        def apply_selected_preset() -> None:
+            selected_entry = get_selected_recent_preset()
+            if selected_entry is None:
+                return
+            self._import_preset_from_path(selected_entry.path)
+
+        def remove_selected_recent_preset() -> None:
+            selected_entry = get_selected_recent_preset()
+            if selected_entry is None:
+                return
+
+            confirmed = messagebox.askyesno(
+                "移除最近预设",
+                f"要从最近预设列表里移除 {selected_entry.path.name} 吗？\n这不会删除实际的预设文件。",
+                parent=dialog,
+            )
+            if not confirmed:
+                return
+
+            if self.repository.remove_recent_preset(selected_entry.path):
+                self.status_var.set(f"已移除最近预设记录：{selected_entry.path.name}")
+            refresh_lists()
+
+        def cleanup_recent_presets() -> None:
+            removed_count = self.repository.cleanup_missing_recent_presets()
+            if removed_count:
+                self.status_var.set(f"已清理 {removed_count} 条失效的最近预设记录。")
+            else:
+                self.status_var.set("最近预设里没有失效记录。")
+            refresh_lists()
+
+        def clear_all_recent_presets() -> None:
+            confirmed = messagebox.askyesno(
+                "清空最近预设",
+                "要清空最近预设列表吗？\n这不会删除任何实际的预设文件。",
+                parent=dialog,
+            )
+            if not confirmed:
+                return
+
+            cleared_count = self.repository.clear_recent_presets()
+            self.status_var.set(f"已清空最近预设列表，共移除 {cleared_count} 条记录。")
+            refresh_lists()
+
+        def compare_selected_snapshot() -> None:
+            selected_items = get_selected_snapshots(min_count=1, max_count=1)
+            if not selected_items:
+                return
+
+            selected_snapshot = selected_items[0]
+            try:
+                current_values = self._collect_values()
+            except TrainerDataError as error:
+                messagebox.showerror("对比失败", str(error), parent=dialog)
+                self.status_var.set(str(error))
+                return
+
+            diff_items = build_full_value_diff(selected_snapshot.values, current_values)
+            if not diff_items:
+                messagebox.showinfo("没有差异", "当前数值与这个快照完全一致。", parent=dialog)
+                self.status_var.set("当前数值与所选快照一致。")
+                return
+
+            self._open_snapshot_compare_dialog(selected_snapshot, diff_items)
+
+        def compare_two_snapshots() -> None:
+            selected_items = get_selected_snapshots(min_count=2, max_count=2)
+            if not selected_items:
+                return
+
+            left_snapshot, right_snapshot = selected_items
+            diff_items = build_full_value_diff(left_snapshot.values, right_snapshot.values)
+            if not diff_items:
+                messagebox.showinfo("没有差异", "这两个快照完全一致。", parent=dialog)
+                self.status_var.set("所选两个快照完全一致。")
+                return
+
+            self._open_snapshot_pair_compare_dialog(left_snapshot, right_snapshot, diff_items)
+
+        def apply_selected_snapshot() -> None:
+            selected_items = get_selected_snapshots(min_count=1, max_count=1)
+            if not selected_items:
+                return
+            self._apply_snapshot_from_data(dialog, selected_items[0])
+
+        def rename_selected_snapshot() -> None:
+            selected_items = get_selected_snapshots(min_count=1, max_count=1)
+            if not selected_items:
+                return
+            if self._rename_snapshot(selected_items[0], parent=dialog) is not None:
+                refresh_lists()
+
+        def edit_selected_snapshot_notes() -> None:
+            selected_items = get_selected_snapshots(min_count=1)
+            if not selected_items:
+                return
+            if self._batch_edit_snapshot_note(selected_items, parent=dialog):
+                refresh_lists()
+
+        def edit_selected_snapshot_categories() -> None:
+            selected_items = get_selected_snapshots(min_count=1)
+            if not selected_items:
+                return
+            if self._batch_edit_snapshot_category(selected_items, parent=dialog):
+                refresh_lists()
+
+        def toggle_selected_snapshot_favorite() -> None:
+            selected_items = get_selected_snapshots(min_count=1)
+            if not selected_items:
+                return
+            if self._toggle_snapshot_favorite(selected_items, parent=dialog):
+                refresh_lists()
+
+        def delete_selected_snapshots() -> None:
+            selected_items = get_selected_snapshots(min_count=1)
+            if not selected_items:
+                return
+            if self._delete_snapshots(selected_items, parent=dialog):
+                refresh_lists()
+
+        def save_snapshot_and_refresh() -> None:
+            snapshot_path = self._save_snapshot()
+            if snapshot_path is not None:
+                refresh_lists()
+
+        snapshot_search_var.trace_add("write", lambda *_args: refresh_snapshot_list())
+        snapshot_filter_var.trace_add("write", lambda *_args: refresh_snapshot_list())
+        snapshot_category_var.trace_add("write", lambda *_args: refresh_snapshot_list())
+
+        ttk.Button(preset_action_frame, text="套用选中", command=apply_selected_preset).grid(row=0, column=0)
+        ttk.Button(preset_action_frame, text="移除记录", command=remove_selected_recent_preset).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(preset_action_frame, text="清理失效", command=cleanup_recent_presets).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(preset_action_frame, text="清空列表", command=clear_all_recent_presets).grid(row=0, column=3, padx=(8, 0))
+        ttk.Button(preset_action_frame, text="刷新列表", command=refresh_lists).grid(row=0, column=4, padx=(8, 0))
+
+        ttk.Button(snapshot_action_frame, text="保存当前快照", command=save_snapshot_and_refresh).grid(row=0, column=0)
+        ttk.Button(snapshot_action_frame, text="收藏/取消收藏", command=toggle_selected_snapshot_favorite).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="设置分类", command=edit_selected_snapshot_categories).grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="批量备注", command=edit_selected_snapshot_notes).grid(row=0, column=3, padx=(8, 0))
+        ttk.Button(snapshot_action_frame, text="对比当前", command=compare_selected_snapshot).grid(row=0, column=4, padx=(8, 0))
+
+        ttk.Button(snapshot_action_frame, text="比较两个快照", command=compare_two_snapshots).grid(row=1, column=0, pady=(8, 0))
+        ttk.Button(snapshot_action_frame, text="套用选中快照", command=apply_selected_snapshot).grid(row=1, column=1, padx=(8, 0), pady=(8, 0))
+        ttk.Button(snapshot_action_frame, text="重命名快照", command=rename_selected_snapshot).grid(row=1, column=2, padx=(8, 0), pady=(8, 0))
+        ttk.Button(snapshot_action_frame, text="删除快照", command=delete_selected_snapshots).grid(row=1, column=3, padx=(8, 0), pady=(8, 0))
+        ttk.Button(snapshot_action_frame, text="刷新列表", command=refresh_lists).grid(row=1, column=4, padx=(8, 0), pady=(8, 0))
+
+        preset_listbox.bind("<Double-Button-1>", lambda _event: apply_selected_preset())
+        snapshot_listbox.bind("<Double-Button-1>", lambda _event: compare_selected_snapshot())
+        search_entry.focus_set()
         refresh_lists()
 
     def _open_batch_apply_dialog(self) -> None:

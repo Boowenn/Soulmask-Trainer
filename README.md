@@ -19,9 +19,13 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Batch-apply the current setup to multiple templates in one pass
 - Save the current template as a named snapshot
 - Add short notes to snapshots for later recall
+- Mark snapshots as favorites for quick reuse
+- Assign categories to snapshots for scene-based organization
 - Compare the current setup with a saved snapshot before restoring it
 - Compare two saved snapshots side by side
 - Search snapshots by name or note in the snapshot center
+- Filter snapshots by favorites, notes, categories, and keyword search
+- Batch-edit snapshot notes or categories from the snapshot center
 - Rename or delete snapshots directly from the snapshot center
 - Open a simple preset/snapshot center for reuse workflows
 - Remove single recent preset records, clean invalid history, or clear the recent list

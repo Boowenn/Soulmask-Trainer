@@ -262,6 +262,45 @@ class TrainerRepositoryTests(unittest.TestCase):
         self.assertEqual(renamed_snapshot.snapshot_note, "Keep this note")
 
 
+    def test_snapshot_category_and_favorite_persist_and_update(self) -> None:
+        snapshot_path = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 2},
+            "Boss Prep",
+            "Before first boss",
+            "Boss",
+            True,
+        )
+
+        loaded_snapshot = self.repository.load_snapshot(snapshot_path)
+        self.assertEqual(loaded_snapshot.snapshot_category, "Boss")
+        self.assertTrue(loaded_snapshot.is_favorite)
+        self.assertTrue(snapshot_matches_keyword(loaded_snapshot, "boss"))
+
+        updated_category = self.repository.update_snapshot_category(snapshot_path, "Arena")
+        self.assertEqual(updated_category.snapshot_category, "Arena")
+        self.assertTrue(snapshot_matches_keyword(updated_category, "arena"))
+
+        unfavorited_snapshot = self.repository.set_snapshot_favorite(snapshot_path, False)
+        self.assertFalse(unfavorited_snapshot.is_favorite)
+
+    def test_rename_snapshot_preserves_category_and_favorite(self) -> None:
+        snapshot_path = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 2},
+            "Named Snapshot",
+            "Keep this note",
+            "Builds",
+            True,
+        )
+
+        renamed_path = self.repository.rename_snapshot(snapshot_path, "Renamed Snapshot")
+        renamed_snapshot = self.repository.load_snapshot(renamed_path)
+
+        self.assertEqual(renamed_snapshot.snapshot_category, "Builds")
+        self.assertTrue(renamed_snapshot.is_favorite)
+
+
 class EncodingTests(unittest.TestCase):
     def test_detect_utf16_bom(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir_name:
