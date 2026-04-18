@@ -27,6 +27,10 @@ python -m PyInstaller `
 New-Item -ItemType Directory -Force release | Out-Null
 Compress-Archive -Path dist\SoulmaskTrainer.exe -DestinationPath release\SoulmaskTrainer-windows.zip -Force
 
+if (Test-Path SoulmaskTrainer.spec) {
+    Remove-Item -LiteralPath SoulmaskTrainer.spec -Force
+}
+
 Write-Host "Build complete:"
 Write-Host "  EXE: $repoRoot\\dist\\SoulmaskTrainer.exe"
 Write-Host "  ZIP: $repoRoot\\release\\SoulmaskTrainer-windows.zip"

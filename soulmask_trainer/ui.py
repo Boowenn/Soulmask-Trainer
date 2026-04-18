@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from typing import Any
 
+from soulmask_trainer.catalog import MODULES, ModuleDefinition, ModulePreset, normalize_preset_value
 from soulmask_trainer.data import LoadedProfile, SettingMeta, TrainerDataError, TrainerRepository
 
 
@@ -15,7 +16,7 @@ class FieldState:
     meta: SettingMeta
     variable: tk.Variable
     original_value: Any
-    row: ttk.Frame
+    rows: list[ttk.Frame]
 
 
 class ScrollableFrame(ttk.Frame):
@@ -55,7 +56,9 @@ class SoulmaskTrainerApp(tk.Tk):
         self.summary_var = tk.StringVar(value="未加载配置文件。")
 
         self.profile_combo: ttk.Combobox | None = None
+        self.notebook: ttk.Notebook | None = None
         self.field_container: ScrollableFrame | None = None
+        self.searchable_rows: dict[str, ttk.Frame] = {}
 
         self._build_layout()
         self._try_autoload()
@@ -91,27 +94,8 @@ class SoulmaskTrainerApp(tk.Tk):
         ttk.Button(toolbar, text="保存", command=self._save_profile).grid(row=1, column=3, pady=(10, 0), padx=(0, 8))
         ttk.Button(toolbar, text="恢复最近备份", command=self._restore_profile).grid(row=1, column=4, pady=(10, 0))
 
-        content = ttk.Notebook(self)
-        content.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
-
-        editor_tab = ttk.Frame(content, padding=12)
-        editor_tab.columnconfigure(0, weight=1)
-        editor_tab.rowconfigure(2, weight=1)
-        content.add(editor_tab, text="全部参数")
-
-        ttk.Label(editor_tab, textvariable=self.summary_var, justify="left").grid(row=0, column=0, sticky="ew")
-
-        search_frame = ttk.Frame(editor_tab)
-        search_frame.grid(row=1, column=0, sticky="ew", pady=(12, 12))
-        search_frame.columnconfigure(1, weight=1)
-        ttk.Label(search_frame, text="搜索").grid(row=0, column=0, sticky="w")
-        search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
-        search_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
-        search_entry.bind("<KeyRelease>", lambda _event: self._apply_filter())
-        ttk.Button(search_frame, text="清空", command=self._clear_search).grid(row=0, column=2)
-
-        self.field_container = ScrollableFrame(editor_tab)
-        self.field_container.grid(row=2, column=0, sticky="nsew")
+        self.notebook = ttk.Notebook(self)
+        self.notebook.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
 
         status_bar = ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(12, 6))
         status_bar.grid(row=2, column=0, sticky="ew")
@@ -206,66 +190,148 @@ class SoulmaskTrainerApp(tk.Tk):
 
     def _clear_fields(self) -> None:
         self.field_states.clear()
-        if self.field_container is None:
+        self.searchable_rows.clear()
+        self.field_container = None
+        if self.notebook is None:
             return
-        for child in self.field_container.inner.winfo_children():
-            child.destroy()
+        for tab_id in self.notebook.tabs():
+            self.notebook.forget(tab_id)
+
+    def _ensure_field_state(self, key: str, meta: SettingMeta, current_value: Any) -> FieldState:
+        state = self.field_states.get(key)
+        if state is not None:
+            return state
+
+        if meta.is_toggle:
+            variable: tk.Variable = tk.BooleanVar(value=bool(current_value))
+        else:
+            variable = tk.StringVar(value=self._format_value(current_value))
+
+        state = FieldState(
+            meta=meta,
+            variable=variable,
+            original_value=current_value,
+            rows=[],
+        )
+        self.field_states[key] = state
+        return state
 
     def _build_fields(self, loaded_profile: LoadedProfile) -> None:
-        if self.field_container is None:
+        if self.notebook is None:
             return
 
         self._clear_fields()
+        self._build_all_settings_tab(loaded_profile)
+        for module in MODULES:
+            self._build_module_tab(loaded_profile, module)
+        self._apply_filter()
+
+    def _build_all_settings_tab(self, loaded_profile: LoadedProfile) -> None:
+        assert self.notebook is not None
+
+        editor_tab = ttk.Frame(self.notebook, padding=12)
+        editor_tab.columnconfigure(0, weight=1)
+        editor_tab.rowconfigure(2, weight=1)
+        self.notebook.add(editor_tab, text="全部参数")
+
+        ttk.Label(editor_tab, textvariable=self.summary_var, justify="left").grid(row=0, column=0, sticky="ew")
+
+        search_frame = ttk.Frame(editor_tab)
+        search_frame.grid(row=1, column=0, sticky="ew", pady=(12, 12))
+        search_frame.columnconfigure(1, weight=1)
+        ttk.Label(search_frame, text="搜索").grid(row=0, column=0, sticky="w")
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
+        search_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
+        search_entry.bind("<KeyRelease>", lambda _event: self._apply_filter())
+        ttk.Button(search_frame, text="清空", command=self._clear_search).grid(row=0, column=2)
+
+        self.field_container = ScrollableFrame(editor_tab)
+        self.field_container.grid(row=2, column=0, sticky="nsew")
+
         ordered_items = sorted(
-            (
-                (key, meta)
-                for key, meta in loaded_profile.metadata.items()
-                if meta.is_visible
-            ),
+            ((key, meta) for key, meta in loaded_profile.metadata.items() if meta.is_visible),
             key=lambda item: (item[1].label.lower(), item[0].lower()),
         )
-
         for row_index, (key, meta) in enumerate(ordered_items):
             current_value = loaded_profile.values.get(key, meta.default_value)
-            row = ttk.Frame(self.field_container.inner, padding=(4, 4))
+            state = self._ensure_field_state(key, meta, current_value)
+            row = self._create_field_row(self.field_container.inner, key, state)
             row.grid(row=row_index, column=0, sticky="ew")
-            row.columnconfigure(1, weight=1)
+            self.searchable_rows[key] = row
 
-            label = ttk.Label(row, text=meta.label, width=28)
-            label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+    def _build_module_tab(self, loaded_profile: LoadedProfile, module: ModuleDefinition) -> None:
+        assert self.notebook is not None
 
-            detail_text = f"{key} | 范围: {self._format_range(meta)}"
-            ttk.Label(row, text=detail_text, foreground="#666666").grid(
-                row=1,
-                column=0,
-                columnspan=3,
-                sticky="w",
-                padx=(0, 8),
-            )
+        module_tab = ttk.Frame(self.notebook, padding=12)
+        module_tab.columnconfigure(0, weight=1)
+        module_tab.rowconfigure(2, weight=1)
+        self.notebook.add(module_tab, text=module.title)
 
-            if meta.is_toggle:
-                variable: tk.Variable = tk.BooleanVar(value=bool(current_value))
-                widget = ttk.Checkbutton(row, variable=variable)
-                widget.grid(row=0, column=1, sticky="w")
-            else:
-                variable = tk.StringVar(value=self._format_value(current_value))
-                widget = ttk.Entry(row, textvariable=variable, width=18)
-                widget.grid(row=0, column=1, sticky="w")
+        ttk.Label(module_tab, text=module.description, justify="left").grid(row=0, column=0, sticky="ew")
 
+        preset_frame = ttk.Frame(module_tab)
+        preset_frame.grid(row=1, column=0, sticky="ew", pady=(10, 10))
+        preset_frame.columnconfigure(0, weight=1)
+        ttk.Label(preset_frame, text="快捷预设").grid(row=0, column=0, sticky="w")
+
+        for column_index, preset in enumerate(module.presets, start=1):
             ttk.Button(
-                row,
-                text="还原",
-                command=lambda item_key=key: self._reset_field(item_key),
-            ).grid(row=0, column=2, padx=(8, 0))
+                preset_frame,
+                text=preset.name,
+                command=lambda selected_module=module, selected_preset=preset: self._apply_preset(selected_module, selected_preset),
+            ).grid(row=0, column=column_index, padx=(8, 0))
 
-            self.field_states[key] = FieldState(
-                meta=meta,
-                variable=variable,
-                original_value=current_value,
-                row=row,
-            )
+        scrollable = ScrollableFrame(module_tab)
+        scrollable.grid(row=2, column=0, sticky="nsew")
 
-        self._apply_filter()
+        visible_fields = [
+            key
+            for key in module.fields
+            if key in loaded_profile.metadata and loaded_profile.metadata[key].is_visible
+        ]
+
+        if not visible_fields:
+            ttk.Label(scrollable.inner, text="当前模板没有这些可编辑字段。").grid(row=0, column=0, sticky="w")
+            return
+
+        for row_index, key in enumerate(visible_fields):
+            meta = loaded_profile.metadata[key]
+            current_value = loaded_profile.values.get(key, meta.default_value)
+            state = self._ensure_field_state(key, meta, current_value)
+            row = self._create_field_row(scrollable.inner, key, state)
+            row.grid(row=row_index, column=0, sticky="ew")
+
+    def _create_field_row(self, parent: ttk.Frame, key: str, state: FieldState) -> ttk.Frame:
+        row = ttk.Frame(parent, padding=(4, 4))
+        row.columnconfigure(1, weight=1)
+
+        label = ttk.Label(row, text=state.meta.label, width=28)
+        label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        detail_text = f"{key} | 范围: {self._format_range(state.meta)}"
+        ttk.Label(row, text=detail_text, foreground="#666666").grid(
+            row=1,
+            column=0,
+            columnspan=3,
+            sticky="w",
+            padx=(0, 8),
+        )
+
+        if state.meta.is_toggle:
+            widget = ttk.Checkbutton(row, variable=state.variable)
+            widget.grid(row=0, column=1, sticky="w")
+        else:
+            widget = ttk.Entry(row, textvariable=state.variable, width=18)
+            widget.grid(row=0, column=1, sticky="w")
+
+        ttk.Button(
+            row,
+            text="还原",
+            command=lambda item_key=key: self._reset_field(item_key),
+        ).grid(row=0, column=2, padx=(8, 0))
+
+        state.rows.append(row)
+        return row
 
     def _format_range(self, meta: SettingMeta) -> str:
         if meta.is_toggle:
@@ -299,12 +365,29 @@ class SoulmaskTrainerApp(tk.Tk):
 
     def _apply_filter(self) -> None:
         keyword = self.search_var.get().strip().lower()
-        for key, state in self.field_states.items():
+        for key, row in self.searchable_rows.items():
+            state = self.field_states[key]
             haystack = f"{key} {state.meta.label}".lower()
             if not keyword or keyword in haystack:
-                state.row.grid()
+                row.grid()
             else:
-                state.row.grid_remove()
+                row.grid_remove()
+
+    def _apply_preset(self, module: ModuleDefinition, preset: ModulePreset) -> None:
+        updated_count = 0
+        for key, value in preset.values.items():
+            state = self.field_states.get(key)
+            if state is None:
+                continue
+
+            normalized_value = normalize_preset_value(state.meta, value)
+            if state.meta.is_toggle:
+                state.variable.set(bool(normalized_value))
+            else:
+                state.variable.set(self._format_value(normalized_value))
+            updated_count += 1
+
+        self.status_var.set(f"已应用预设“{preset.name}”，更新 {updated_count} 个字段。")
 
     def _collect_values(self) -> dict[str, Any]:
         if self.loaded_profile is None:
