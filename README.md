@@ -11,6 +11,7 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Read the matching `GameXishuConfig_Template*.json` metadata files
 - Edit visible settings through a desktop UI
 - Dedicated "经验与等级" tab with quick presets
+- Dedicated "战斗系统" tab with quick presets
 - Create timestamped backups before every save
 - Restore the latest backup for the selected profile
 

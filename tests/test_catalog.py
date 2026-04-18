@@ -10,6 +10,7 @@ class CatalogTests(unittest.TestCase):
     def test_experience_module_is_registered(self) -> None:
         keys = [module.key for module in MODULES]
         self.assertIn("experience", keys)
+        self.assertIn("combat", keys)
 
     def test_numeric_preset_values_are_clamped(self) -> None:
         meta = SettingMeta(
