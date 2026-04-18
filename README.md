@@ -18,10 +18,13 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Remember recently imported/exported presets for one-click reuse
 - Batch-apply the current setup to multiple templates in one pass
 - Save the current template as a named snapshot
+- Add short notes to snapshots for later recall
 - Compare the current setup with a saved snapshot before restoring it
 - Compare two saved snapshots side by side
+- Search snapshots by name or note in the snapshot center
 - Rename or delete snapshots directly from the snapshot center
 - Open a simple preset/snapshot center for reuse workflows
+- Remove single recent preset records, clean invalid history, or clear the recent list
 - Filter the full parameter list down to changed items only
 - Undo all unsaved edits for the current template in one click
 - Dedicated "经验与等级" tab with quick presets
@@ -53,7 +56,7 @@ The packaged executable is written to `dist/SoulmaskTrainer.exe`.
 ## CI
 
 - Pushes and pull requests run unit tests plus a compile smoke test.
-- Version tags like `v0.1.0` build the Windows executable and publish a GitHub Release asset automatically.
+- Version tags like `v0.1.0` build the Windows executable, verify the EXE and ZIP contents, and publish a GitHub Release automatically.
 
 ## Notes
 

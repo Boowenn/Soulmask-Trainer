@@ -66,6 +66,7 @@ class SnapshotData:
     path: Path
     source_profile: str
     snapshot_name: str
+    snapshot_note: str
     created_at: str
     values: dict[str, Any]
 
@@ -97,6 +98,24 @@ def build_full_value_diff(before_values: dict[str, Any], after_values: dict[str,
         for key in keys
         if before_values.get(key) != after_values.get(key)
     ]
+
+
+def snapshot_matches_keyword(snapshot: SnapshotData, keyword: str) -> bool:
+    normalized_keyword = keyword.strip().lower()
+    if not normalized_keyword:
+        return True
+
+    haystack = " ".join(
+        part
+        for part in (
+            snapshot.snapshot_name,
+            snapshot.snapshot_note,
+            snapshot.created_at,
+            snapshot.path.name,
+        )
+        if part
+    ).lower()
+    return normalized_keyword in haystack
 
 
 def sanitize_file_component(value: str, fallback: str) -> str:
@@ -300,7 +319,7 @@ class TrainerRepository:
             return PresetData(source_profile=preset_path.stem, values=dict(payload))
         raise TrainerDataError(f"Preset file format is invalid: {preset_path}")
 
-    def list_recent_presets(self, limit: int = 5) -> list[RecentPresetEntry]:
+    def _load_recent_preset_entries(self, include_missing: bool = False) -> list[RecentPresetEntry]:
         recent_path = self.recent_presets_path()
         if not recent_path.is_file():
             return []
@@ -328,7 +347,7 @@ class TrainerRepository:
             path = Path(raw_path)
             if not path.is_absolute():
                 path = (self.settings_dir / path).resolve()
-            if not path.is_file():
+            if not path.is_file() and not include_missing:
                 continue
 
             entries.append(
@@ -339,10 +358,35 @@ class TrainerRepository:
                     recorded_at=str(raw_item.get("recorded_at") or ""),
                 )
             )
-            if len(entries) >= limit:
-                break
 
         return entries
+
+    def _write_recent_preset_entries(self, entries: list[RecentPresetEntry]) -> None:
+        recent_path = self.recent_presets_path()
+        if not entries:
+            if recent_path.exists():
+                recent_path.unlink()
+            return
+
+        payload = {
+            "schema_version": 1,
+            "items": [
+                {
+                    "path": str(entry.path),
+                    "source_profile": entry.source_profile,
+                    "action": entry.action,
+                    "recorded_at": entry.recorded_at,
+                }
+                for entry in entries
+            ],
+        }
+        recent_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def list_recent_presets(self, limit: int = 5) -> list[RecentPresetEntry]:
+        return self._load_recent_preset_entries()[:limit]
 
     def record_recent_preset(self, preset_path: Path, source_profile: str, action: str) -> list[RecentPresetEntry]:
         resolved_path = preset_path.resolve()
@@ -362,48 +406,82 @@ class TrainerRepository:
             *existing_entries,
         ][:MAX_RECENT_PRESETS]
 
+        self._write_recent_preset_entries(updated_entries)
+        return updated_entries
+
+    def remove_recent_preset(self, preset_path: Path) -> bool:
+        resolved_path = preset_path.resolve()
+        existing_entries = self._load_recent_preset_entries(include_missing=True)
+        updated_entries = [
+            entry
+            for entry in existing_entries
+            if entry.path.resolve() != resolved_path
+        ]
+        if len(updated_entries) == len(existing_entries):
+            return False
+
+        self._write_recent_preset_entries(updated_entries)
+        return True
+
+    def cleanup_missing_recent_presets(self) -> int:
+        existing_entries = self._load_recent_preset_entries(include_missing=True)
+        valid_entries = [entry for entry in existing_entries if entry.path.is_file()]
+        removed_count = len(existing_entries) - len(valid_entries)
+        if removed_count:
+            self._write_recent_preset_entries(valid_entries)
+        return removed_count
+
+    def clear_recent_presets(self) -> int:
+        existing_entries = self._load_recent_preset_entries(include_missing=True)
+        self._write_recent_preset_entries([])
+        return len(existing_entries)
+
+    def _write_snapshot_payload(
+        self,
+        snapshot_path: Path,
+        *,
+        source_profile: str,
+        snapshot_name: str,
+        snapshot_note: str,
+        created_at: str,
+        values: dict[str, Any],
+    ) -> None:
         payload = {
             "schema_version": 1,
-            "items": [
-                {
-                    "path": str(entry.path),
-                    "source_profile": entry.source_profile,
-                    "action": entry.action,
-                    "recorded_at": entry.recorded_at,
-                }
-                for entry in updated_entries
-            ],
+            "kind": "snapshot",
+            "created_at": created_at,
+            "source_profile": source_profile,
+            "snapshot_name": snapshot_name,
+            "snapshot_note": snapshot_note,
+            "values": values,
         }
-        self.recent_presets_path().write_text(
+        snapshot_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        return updated_entries
 
     def create_snapshot(
         self,
         source_profile: str,
         values: dict[str, Any],
         snapshot_name: str | None = None,
+        snapshot_note: str | None = None,
     ) -> Path:
         timestamp = datetime.now()
         snapshot_dir = self.snapshots_dir_for(source_profile)
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
         display_name = (snapshot_name or "").strip() or "当前配置"
+        display_note = (snapshot_note or "").strip()
         safe_name = sanitize_file_component(display_name, "snapshot")
         snapshot_path = snapshot_dir / f"{timestamp.strftime('%Y%m%d-%H%M%S-%f')}-{safe_name}.json"
-        payload = {
-            "schema_version": 1,
-            "kind": "snapshot",
-            "created_at": timestamp.isoformat(timespec="seconds"),
-            "source_profile": source_profile,
-            "snapshot_name": display_name,
-            "values": values,
-        }
-        snapshot_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        self._write_snapshot_payload(
+            snapshot_path,
+            source_profile=source_profile,
+            snapshot_name=display_name,
+            snapshot_note=display_note,
+            created_at=timestamp.isoformat(timespec="seconds"),
+            values=values,
         )
         return snapshot_path
 
@@ -417,12 +495,14 @@ class TrainerRepository:
             raise TrainerDataError(f"Snapshot values are invalid: {snapshot_path}")
 
         snapshot_name = str(payload.get("snapshot_name") or snapshot_path.stem)
+        snapshot_note = str(payload.get("snapshot_note") or "")
         source_profile = str(payload.get("source_profile") or snapshot_path.parent.name)
         created_at = str(payload.get("created_at") or "")
         return SnapshotData(
             path=snapshot_path,
             source_profile=source_profile,
             snapshot_name=snapshot_name,
+            snapshot_note=snapshot_note,
             created_at=created_at,
             values=dict(raw_values),
         )
@@ -454,22 +534,29 @@ class TrainerRepository:
         if target_path != snapshot_path and target_path.exists():
             raise TrainerDataError(f"Snapshot already exists: {target_path.name}")
 
-        payload = {
-            "schema_version": 1,
-            "kind": "snapshot",
-            "created_at": snapshot.created_at,
-            "source_profile": snapshot.source_profile,
-            "snapshot_name": updated_name,
-            "values": snapshot.values,
-        }
-
-        snapshot_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        self._write_snapshot_payload(
+            snapshot_path,
+            source_profile=snapshot.source_profile,
+            snapshot_name=updated_name,
+            snapshot_note=snapshot.snapshot_note,
+            created_at=snapshot.created_at,
+            values=snapshot.values,
         )
         if target_path != snapshot_path:
             snapshot_path = snapshot_path.rename(target_path)
         return snapshot_path
+
+    def update_snapshot_note(self, snapshot_path: Path, snapshot_note: str) -> SnapshotData:
+        snapshot = self.load_snapshot(snapshot_path)
+        self._write_snapshot_payload(
+            snapshot_path,
+            source_profile=snapshot.source_profile,
+            snapshot_name=snapshot.snapshot_name,
+            snapshot_note=snapshot_note.strip(),
+            created_at=snapshot.created_at,
+            values=snapshot.values,
+        )
+        return self.load_snapshot(snapshot_path)
 
     def delete_snapshot(self, snapshot_path: Path) -> None:
         if not snapshot_path.is_file():

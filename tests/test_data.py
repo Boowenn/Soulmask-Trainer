@@ -13,6 +13,7 @@ from soulmask_trainer.data import (
     get_changed_values,
     read_json_object,
     sanitize_file_component,
+    snapshot_matches_keyword,
 )
 
 
@@ -156,6 +157,30 @@ class TrainerRepositoryTests(unittest.TestCase):
         filtered_entries = self.repository.list_recent_presets(limit=5)
         self.assertEqual([entry.path.name for entry in filtered_entries], ["preset-a.json"])
 
+    def test_recent_presets_support_remove_cleanup_and_clear(self) -> None:
+        first_preset = self.settings_dir / "preset-a.json"
+        second_preset = self.settings_dir / "preset-b.json"
+        self.repository.export_preset(first_preset, "GameXishu_Template.json", {"ExpRatio": 3})
+        self.repository.export_preset(second_preset, "GameXishu_Template.json", {"ExpRatio": 4})
+
+        self.repository.record_recent_preset(first_preset, "GameXishu_Template.json", "export")
+        self.repository.record_recent_preset(second_preset, "GameXishu_Template.json", "import")
+
+        self.assertTrue(self.repository.remove_recent_preset(first_preset))
+        self.assertEqual(
+            [entry.path.name for entry in self.repository.list_recent_presets(limit=5)],
+            ["preset-b.json"],
+        )
+
+        second_preset.unlink()
+        self.assertEqual(self.repository.cleanup_missing_recent_presets(), 1)
+        self.assertEqual(self.repository.list_recent_presets(limit=5), [])
+
+        self.repository.export_preset(first_preset, "GameXishu_Template.json", {"ExpRatio": 5})
+        self.repository.record_recent_preset(first_preset, "GameXishu_Template.json", "export")
+        self.assertEqual(self.repository.clear_recent_presets(), 1)
+        self.assertEqual(self.repository.list_recent_presets(limit=5), [])
+
     def test_create_and_list_snapshots(self) -> None:
         first_snapshot = self.repository.create_snapshot(
             "GameXishu_Template.json",
@@ -203,6 +228,38 @@ class TrainerRepositoryTests(unittest.TestCase):
 
         self.assertFalse(snapshot_path.exists())
         self.assertFalse(snapshot_dir.exists())
+
+
+    def test_snapshot_notes_persist_and_update(self) -> None:
+        snapshot_path = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 2},
+            "Boss Prep",
+            "Before first boss",
+        )
+
+        loaded_snapshot = self.repository.load_snapshot(snapshot_path)
+        self.assertEqual(loaded_snapshot.snapshot_note, "Before first boss")
+        self.assertTrue(snapshot_matches_keyword(loaded_snapshot, "boss"))
+        self.assertTrue(snapshot_matches_keyword(loaded_snapshot, "first boss"))
+        self.assertFalse(snapshot_matches_keyword(loaded_snapshot, "farming"))
+
+        updated_snapshot = self.repository.update_snapshot_note(snapshot_path, "Before arena retry")
+        self.assertEqual(updated_snapshot.snapshot_note, "Before arena retry")
+        self.assertEqual(self.repository.load_snapshot(snapshot_path).snapshot_note, "Before arena retry")
+
+    def test_rename_snapshot_preserves_note(self) -> None:
+        snapshot_path = self.repository.create_snapshot(
+            "GameXishu_Template.json",
+            {"ExpRatio": 2},
+            "Named Snapshot",
+            "Keep this note",
+        )
+
+        renamed_path = self.repository.rename_snapshot(snapshot_path, "Renamed Snapshot")
+        renamed_snapshot = self.repository.load_snapshot(renamed_path)
+
+        self.assertEqual(renamed_snapshot.snapshot_note, "Keep this note")
 
 
 class EncodingTests(unittest.TestCase):

@@ -73,6 +73,22 @@ jobs:
             Select-Object Name, Length |
             Format-Table -AutoSize
 
+      - name: Verify release zip contents
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zipPath = Join-Path $PWD "release/SoulmaskTrainer-windows.zip"
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $entry = $archive.Entries | Where-Object { $_.FullName -eq "SoulmaskTrainer.exe" }
+            if (-not $entry) {
+              throw "Release zip does not contain SoulmaskTrainer.exe"
+            }
+          }
+          finally {
+            $archive.Dispose()
+          }
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
