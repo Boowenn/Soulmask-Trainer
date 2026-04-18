@@ -79,10 +79,15 @@ jobs:
         with:
           name: SoulmaskTrainer-windows
           path: artifacts
+          merge-multiple: true
+
+      - name: Inspect downloaded artifacts
+        shell: bash
+        run: find artifacts -maxdepth 3 -type f | sort
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/SoulmaskTrainer.exe
-            artifacts/SoulmaskTrainer-windows.zip
+            artifacts/**/*.exe
+            artifacts/**/*.zip
