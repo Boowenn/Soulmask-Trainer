@@ -9,11 +9,17 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Auto-detect the `WS/Config/GameplaySettings` directory
 - Load official `GameXishu_Template*.json` profiles
 - Read the matching `GameXishuConfig_Template*.json` metadata files
+- Beginner-friendly `傻瓜版` page with one-click combinations and a short list of common settings
 - Edit visible settings through a desktop UI
 - Dedicated "经验与等级" tab with quick presets
 - Dedicated "战斗系统" tab with quick presets
 - Dedicated "掉落与物品" tab with quick presets
 - Dedicated "生存与恢复" tab with quick presets
+- Dedicated "制造与生产" tab with quick presets
+- Dedicated "建筑系统" tab with quick presets
+- Dedicated "NPC与招募" tab with quick presets
+- Dedicated "动物与成长" tab with quick presets
+- Dedicated "耐久与腐坏" tab with quick presets
 - Create timestamped backups before every save
 - Restore the latest backup for the selected profile
 

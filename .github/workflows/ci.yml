@@ -1,5 +1,12 @@
 name: CI
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches:
@@ -8,6 +15,9 @@ on:
       - "v*"
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -51,6 +61,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SoulmaskTrainer-windows
+          retention-days: 14
           path: |
             dist/SoulmaskTrainer.exe
             release/SoulmaskTrainer-windows.zip

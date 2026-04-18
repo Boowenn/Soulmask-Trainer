@@ -63,7 +63,8 @@ class TrainerRepositoryTests(unittest.TestCase):
 
     def test_discover_settings_dir(self) -> None:
         discovered = TrainerRepository.discover_settings_dir(Path(self.temp_dir.name))
-        self.assertEqual(discovered, self.settings_dir)
+        self.assertIsNotNone(discovered)
+        self.assertTrue(discovered.samefile(self.settings_dir))
 
     def test_list_profiles_ignores_config_templates(self) -> None:
         profiles = [path.name for path in self.repository.list_profiles()]

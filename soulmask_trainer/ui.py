@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from typing import Any
 
-from soulmask_trainer.catalog import MODULES, ModuleDefinition, ModulePreset, normalize_preset_value
+from soulmask_trainer.catalog import EASY_FIELDS, EASY_PRESETS, EasyPreset, MODULES, ModuleDefinition, ModulePreset, normalize_preset_value
 from soulmask_trainer.data import LoadedProfile, SettingMeta, TrainerDataError, TrainerRepository
 
 
@@ -221,10 +221,57 @@ class SoulmaskTrainerApp(tk.Tk):
             return
 
         self._clear_fields()
+        self._build_easy_mode_tab(loaded_profile)
         self._build_all_settings_tab(loaded_profile)
         for module in MODULES:
             self._build_module_tab(loaded_profile, module)
         self._apply_filter()
+
+    def _build_easy_mode_tab(self, loaded_profile: LoadedProfile) -> None:
+        assert self.notebook is not None
+
+        easy_tab = ttk.Frame(self.notebook, padding=12)
+        easy_tab.columnconfigure(0, weight=1)
+        easy_tab.rowconfigure(2, weight=1)
+        self.notebook.add(easy_tab, text="傻瓜版")
+
+        ttk.Label(
+            easy_tab,
+            text="先点一个一键组合，再按需要微调下面这些常用项，最后点击顶部“保存”。",
+            justify="left",
+        ).grid(row=0, column=0, sticky="ew")
+
+        preset_frame = ttk.LabelFrame(easy_tab, text="一键组合", padding=10)
+        preset_frame.grid(row=1, column=0, sticky="ew", pady=(10, 10))
+        for index, preset in enumerate(EASY_PRESETS):
+            button = ttk.Button(
+                preset_frame,
+                text=preset.name,
+                command=lambda selected_preset=preset: self._apply_easy_preset(selected_preset),
+            )
+            button.grid(row=index, column=0, sticky="ew", pady=(0, 8))
+            ttk.Label(preset_frame, text=preset.description, foreground="#666666").grid(
+                row=index,
+                column=1,
+                sticky="w",
+                padx=(12, 0),
+                pady=(0, 8),
+            )
+
+        content = ScrollableFrame(easy_tab)
+        content.grid(row=2, column=0, sticky="nsew")
+
+        visible_fields = [
+            key
+            for key in EASY_FIELDS
+            if key in loaded_profile.metadata and loaded_profile.metadata[key].is_visible
+        ]
+        for row_index, key in enumerate(visible_fields):
+            meta = loaded_profile.metadata[key]
+            current_value = loaded_profile.values.get(key, meta.default_value)
+            state = self._ensure_field_state(key, meta, current_value)
+            row = self._create_field_row(content.inner, key, state)
+            row.grid(row=row_index, column=0, sticky="ew")
 
     def _build_all_settings_tab(self, loaded_profile: LoadedProfile) -> None:
         assert self.notebook is not None
@@ -388,6 +435,22 @@ class SoulmaskTrainerApp(tk.Tk):
             updated_count += 1
 
         self.status_var.set(f"已应用预设“{preset.name}”，更新 {updated_count} 个字段。")
+
+    def _apply_easy_preset(self, preset: EasyPreset) -> None:
+        updated_count = 0
+        for key, value in preset.values.items():
+            state = self.field_states.get(key)
+            if state is None:
+                continue
+
+            normalized_value = normalize_preset_value(state.meta, value)
+            if state.meta.is_toggle:
+                state.variable.set(bool(normalized_value))
+            else:
+                state.variable.set(self._format_value(normalized_value))
+            updated_count += 1
+
+        self.status_var.set(f"已应用傻瓜版方案“{preset.name}”，更新 {updated_count} 个字段。")
 
     def _collect_values(self) -> dict[str, Any]:
         if self.loaded_profile is None:

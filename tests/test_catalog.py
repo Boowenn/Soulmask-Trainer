@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import unittest
 
-from soulmask_trainer.catalog import MODULES, normalize_preset_value
+from soulmask_trainer.catalog import EASY_FIELDS, EASY_PRESETS, MODULES, normalize_preset_value
 from soulmask_trainer.data import SettingMeta
 
 
 class CatalogTests(unittest.TestCase):
-    def test_experience_module_is_registered(self) -> None:
+    def test_expected_modules_are_registered(self) -> None:
         keys = [module.key for module in MODULES]
         self.assertIn("experience", keys)
         self.assertIn("combat", keys)
         self.assertIn("drops", keys)
         self.assertIn("survival", keys)
+        self.assertIn("production", keys)
+        self.assertIn("building", keys)
+        self.assertIn("recruitment", keys)
+        self.assertIn("creatures", keys)
+        self.assertIn("durability", keys)
+
+    def test_easy_mode_has_presets_and_fields(self) -> None:
+        self.assertGreaterEqual(len(EASY_PRESETS), 3)
+        self.assertIn("ExpRatio", EASY_FIELDS)
+        self.assertIn("ZhiZuoTimeRatio", EASY_FIELDS)
 
     def test_numeric_preset_values_are_clamped(self) -> None:
         meta = SettingMeta(
