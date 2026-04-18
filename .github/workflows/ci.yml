@@ -57,6 +57,19 @@ jobs:
         shell: pwsh
         run: .\build.ps1
 
+      - name: Verify packaged files
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/SoulmaskTrainer.exe)) {
+            throw "Missing dist/SoulmaskTrainer.exe"
+          }
+          if (-not (Test-Path release/SoulmaskTrainer-windows.zip)) {
+            throw "Missing release/SoulmaskTrainer-windows.zip"
+          }
+          Get-Item dist/SoulmaskTrainer.exe, release/SoulmaskTrainer-windows.zip |
+            Select-Object Name, Length |
+            Format-Table -AutoSize
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:

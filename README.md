@@ -12,8 +12,12 @@ This project intentionally focuses on the game's built-in configuration files fo
 - Beginner-friendly `傻瓜版` page with one-click combinations and a short list of common settings
 - Edit visible settings through a desktop UI
 - Export the current setup as a reusable JSON preset
+- Export only the unsaved changes as a lightweight preset
 - Import a preset JSON and apply it to the current template
+- Preview preset differences before importing
 - Batch-apply the current setup to multiple templates in one pass
+- Filter the full parameter list down to changed items only
+- Undo all unsaved edits for the current template in one click
 - Dedicated "经验与等级" tab with quick presets
 - Dedicated "战斗系统" tab with quick presets
 - Dedicated "掉落与物品" tab with quick presets

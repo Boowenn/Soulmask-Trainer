@@ -9,7 +9,16 @@ from pathlib import Path
 from typing import Any
 
 from soulmask_trainer.catalog import EASY_FIELDS, EASY_PRESETS, EasyPreset, MODULES, ModuleDefinition, ModulePreset, normalize_preset_value
-from soulmask_trainer.data import LoadedProfile, PresetData, SettingMeta, TrainerDataError, TrainerRepository
+from soulmask_trainer.data import (
+    LoadedProfile,
+    PresetData,
+    SettingMeta,
+    TrainerDataError,
+    TrainerRepository,
+    ValueDiff,
+    build_value_diff,
+    get_changed_values,
+)
 
 
 @dataclass
@@ -53,13 +62,16 @@ class SoulmaskTrainerApp(tk.Tk):
         self.settings_dir_var = tk.StringVar()
         self.selected_profile_var = tk.StringVar()
         self.search_var = tk.StringVar()
+        self.changed_only_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="等待加载 GameplaySettings 目录。")
         self.summary_var = tk.StringVar(value="未加载配置文件。")
+        self.change_summary_var = tk.StringVar(value="当前没有未保存改动。")
 
         self.profile_combo: ttk.Combobox | None = None
         self.notebook: ttk.Notebook | None = None
         self.field_container: ScrollableFrame | None = None
         self.searchable_rows: dict[str, ttk.Frame] = {}
+        self._change_refresh_pending = False
 
         self._build_layout()
         self._try_autoload()
@@ -217,6 +229,7 @@ class SoulmaskTrainerApp(tk.Tk):
             original_value=current_value,
             rows=[],
         )
+        variable.trace_add("write", self._schedule_change_refresh)
         self.field_states[key] = state
         return state
 
@@ -225,10 +238,13 @@ class SoulmaskTrainerApp(tk.Tk):
             return
 
         self._clear_fields()
+        self.search_var.set("")
+        self.changed_only_var.set(False)
         self._build_easy_mode_tab(loaded_profile)
         self._build_all_settings_tab(loaded_profile)
         for module in MODULES:
             self._build_module_tab(loaded_profile, module)
+        self._refresh_change_summary()
         self._apply_filter()
 
     def _build_easy_mode_tab(self, loaded_profile: LoadedProfile) -> None:
@@ -236,7 +252,7 @@ class SoulmaskTrainerApp(tk.Tk):
 
         easy_tab = ttk.Frame(self.notebook, padding=12)
         easy_tab.columnconfigure(0, weight=1)
-        easy_tab.rowconfigure(2, weight=1)
+        easy_tab.rowconfigure(3, weight=1)
         self.notebook.add(easy_tab, text="傻瓜版")
 
         ttk.Label(
@@ -245,8 +261,27 @@ class SoulmaskTrainerApp(tk.Tk):
             justify="left",
         ).grid(row=0, column=0, sticky="ew")
 
+        change_frame = ttk.LabelFrame(easy_tab, text="当前改动", padding=10)
+        change_frame.grid(row=1, column=0, sticky="ew", pady=(10, 10))
+        change_frame.columnconfigure(0, weight=1)
+        ttk.Label(change_frame, textvariable=self.change_summary_var, justify="left").grid(
+            row=0,
+            column=0,
+            sticky="w",
+        )
+        ttk.Button(
+            change_frame,
+            text="撤销未保存修改",
+            command=self._reset_unsaved_changes,
+        ).grid(row=0, column=1, padx=(12, 0))
+        ttk.Button(
+            change_frame,
+            text="只导出改动项",
+            command=lambda: self._export_preset(changed_only=True),
+        ).grid(row=0, column=2, padx=(8, 0))
+
         preset_frame = ttk.LabelFrame(easy_tab, text="一键组合", padding=10)
-        preset_frame.grid(row=1, column=0, sticky="ew", pady=(10, 10))
+        preset_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         for index, preset in enumerate(EASY_PRESETS):
             button = ttk.Button(
                 preset_frame,
@@ -263,7 +298,7 @@ class SoulmaskTrainerApp(tk.Tk):
             )
 
         content = ScrollableFrame(easy_tab)
-        content.grid(row=2, column=0, sticky="nsew")
+        content.grid(row=3, column=0, sticky="nsew")
 
         visible_fields = [
             key
@@ -295,6 +330,12 @@ class SoulmaskTrainerApp(tk.Tk):
         search_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
         search_entry.bind("<KeyRelease>", lambda _event: self._apply_filter())
         ttk.Button(search_frame, text="清空", command=self._clear_search).grid(row=0, column=2)
+        ttk.Checkbutton(
+            search_frame,
+            text="只看已改动",
+            variable=self.changed_only_var,
+            command=self._apply_filter,
+        ).grid(row=0, column=3, padx=(12, 0))
 
         self.field_container = ScrollableFrame(editor_tab)
         self.field_container.grid(row=2, column=0, sticky="nsew")
@@ -414,12 +455,82 @@ class SoulmaskTrainerApp(tk.Tk):
         self.search_var.set("")
         self._apply_filter()
 
+    def _schedule_change_refresh(self, *_args: str) -> None:
+        if self._change_refresh_pending:
+            return
+        self._change_refresh_pending = True
+        self.after_idle(self._refresh_change_summary)
+
+    def _refresh_change_summary(self) -> None:
+        self._change_refresh_pending = False
+        if self.loaded_profile is None:
+            self.change_summary_var.set("当前没有未保存改动。")
+            return
+
+        changed_keys = self._get_changed_keys()
+        if not changed_keys:
+            self.change_summary_var.set("当前没有未保存改动。\n可以先点一键组合，再微调常用项。")
+            self._apply_filter()
+            return
+
+        changed_labels = [
+            self.field_states[key].meta.label
+            for key in sorted(changed_keys, key=lambda item: self.field_states[item].meta.label.lower())
+            if key in self.field_states
+        ]
+        preview_labels = "、".join(changed_labels[:5])
+        if len(changed_labels) > 5:
+            preview_labels = f"{preview_labels} 等 {len(changed_labels)} 项"
+
+        self.change_summary_var.set(
+            f"当前有 {len(changed_keys)} 项未保存改动。\n主要改动: {preview_labels}"
+        )
+        self._apply_filter()
+
+    def _collect_values_for_change_detection(self) -> dict[str, Any]:
+        if self.loaded_profile is None:
+            return {}
+
+        merged_values = dict(self.loaded_profile.values)
+        for key, state in self.field_states.items():
+            meta = state.meta
+            raw_value = state.variable.get()
+
+            if meta.is_toggle:
+                merged_values[key] = 1 if bool(raw_value) else 0
+                continue
+
+            text = str(raw_value).strip()
+            try:
+                merged_values[key] = self._parse_numeric_value(meta, text)
+            except TrainerDataError:
+                merged_values[key] = text
+
+        return merged_values
+
+    def _get_changed_keys(self) -> list[str]:
+        if self.loaded_profile is None:
+            return []
+        current_values = self._collect_values_for_change_detection()
+        return list(get_changed_values(self.loaded_profile.original_values, current_values).keys())
+
+    def _collect_changed_values(self) -> dict[str, Any]:
+        if self.loaded_profile is None:
+            return {}
+        current_values = self._collect_values()
+        return get_changed_values(self.loaded_profile.original_values, current_values)
+
     def _apply_filter(self) -> None:
         keyword = self.search_var.get().strip().lower()
+        changed_keys: set[str] | None = None
+        if self.changed_only_var.get():
+            changed_keys = set(self._get_changed_keys())
         for key, row in self.searchable_rows.items():
             state = self.field_states[key]
             haystack = f"{key} {state.meta.label}".lower()
-            if not keyword or keyword in haystack:
+            matches_keyword = not keyword or keyword in haystack
+            matches_changed = changed_keys is None or key in changed_keys
+            if matches_keyword and matches_changed:
                 row.grid()
             else:
                 row.grid_remove()
@@ -445,7 +556,103 @@ class SoulmaskTrainerApp(tk.Tk):
             else:
                 state.variable.set(self._format_value(normalized_value))
             updated_count += 1
+        self._schedule_change_refresh()
         return updated_count
+
+    def _normalize_preset_values(self, values: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        normalized_values: dict[str, Any] = {}
+        skipped_keys: list[str] = []
+        for key, value in values.items():
+            state = self.field_states.get(key)
+            if state is None:
+                skipped_keys.append(key)
+                continue
+
+            try:
+                normalized_values[key] = normalize_preset_value(state.meta, value)
+            except (TypeError, ValueError) as error:
+                raise TrainerDataError(f"预设字段 {key} 的值无效: {value}") from error
+        return normalized_values, skipped_keys
+
+    def _format_diff_line(self, diff: ValueDiff) -> str:
+        state = self.field_states.get(diff.key)
+        label = state.meta.label if state is not None else diff.key
+        return (
+            f"{label} ({diff.key})"
+            f" | 当前: {self._format_value(diff.before)}"
+            f" -> 导入后: {self._format_value(diff.after)}"
+        )
+
+    def _open_import_preview_dialog(
+        self,
+        preset: PresetData,
+        normalized_values: dict[str, Any],
+        diff_items: list[ValueDiff],
+        skipped_keys: list[str],
+    ) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("导入预设预览")
+        dialog.geometry("760x520")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(1, weight=1)
+
+        summary_lines = [
+            f"来源预设: {preset.source_profile}",
+            f"可识别字段: {len(normalized_values)} 项",
+            f"即将改动: {len(diff_items)} 项",
+        ]
+        if skipped_keys:
+            summary_lines.append(f"已忽略当前模板不存在的字段: {len(skipped_keys)} 项")
+
+        ttk.Label(
+            dialog,
+            text="\n".join(summary_lines),
+            justify="left",
+            padding=(12, 12, 12, 0),
+        ).grid(row=0, column=0, sticky="ew")
+
+        list_frame = ttk.Frame(dialog, padding=12)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        listbox = tk.Listbox(list_frame)
+        listbox.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        listbox.configure(yscrollcommand=scrollbar.set)
+
+        for diff in diff_items:
+            listbox.insert(tk.END, self._format_diff_line(diff))
+
+        if skipped_keys:
+            listbox.insert(tk.END, "")
+            listbox.insert(tk.END, f"以下字段未导入: {', '.join(skipped_keys[:10])}")
+            if len(skipped_keys) > 10:
+                listbox.insert(tk.END, f"... 以及其他 {len(skipped_keys) - 10} 项")
+
+        action_frame = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        action_frame.grid(row=2, column=0, sticky="ew")
+        ttk.Button(action_frame, text="取消", command=dialog.destroy).grid(row=0, column=0)
+        ttk.Button(
+            action_frame,
+            text="确认导入",
+            command=lambda: self._confirm_import_preset(dialog, preset, normalized_values, skipped_keys),
+        ).grid(row=0, column=1, padx=(8, 0))
+
+    def _confirm_import_preset(
+        self,
+        dialog: tk.Toplevel,
+        preset: PresetData,
+        normalized_values: dict[str, Any],
+        skipped_keys: list[str],
+    ) -> None:
+        updated_count = self._apply_values_to_fields(normalized_values)
+        dialog.destroy()
+        skipped_text = f"，忽略 {len(skipped_keys)} 个不适用字段" if skipped_keys else ""
+        self.status_var.set(f"已导入预设“{preset.source_profile}”，更新 {updated_count} 个字段{skipped_text}。")
 
     def _collect_values(self) -> dict[str, Any]:
         if self.loaded_profile is None:
@@ -497,28 +704,44 @@ class SoulmaskTrainerApp(tk.Tk):
         self.status_var.set(f"已保存 {self.loaded_profile.profile_path.name}，备份位于 {backup_path}.")
         self._load_selected_profile()
 
-    def _export_preset(self) -> None:
+    def _export_preset(self, changed_only: bool = False) -> None:
         if self.repository is None or self.loaded_profile is None:
             return
 
+        try:
+            values = self._collect_changed_values() if changed_only else self._collect_values()
+        except TrainerDataError as error:
+            messagebox.showerror("导出失败", str(error))
+            self.status_var.set(str(error))
+            return
+
+        if changed_only and not values:
+            messagebox.showinfo("没有可导出的改动", "当前没有未保存改动，暂时没有内容可以导出。")
+            self.status_var.set("当前没有未保存改动。")
+            return
+
+        preset_name = Path(self.loaded_profile.profile_path.name).stem
+        default_name = f"{preset_name}-changes.json" if changed_only else f"{preset_name}-preset.json"
         destination = filedialog.asksaveasfilename(
-            title="导出当前预设",
+            title="导出改动预设" if changed_only else "导出当前预设",
             defaultextension=".json",
             filetypes=[("JSON 文件", "*.json")],
-            initialfile=f"{Path(self.loaded_profile.profile_path.name).stem}-preset.json",
+            initialfile=default_name,
         )
         if not destination:
             return
 
         try:
-            values = self._collect_values()
             self.repository.export_preset(Path(destination), self.loaded_profile.profile_path.name, values)
         except TrainerDataError as error:
             messagebox.showerror("导出失败", str(error))
             self.status_var.set(str(error))
             return
 
-        self.status_var.set(f"已导出预设到 {destination}。")
+        if changed_only:
+            self.status_var.set(f"已导出 {len(values)} 项改动到 {destination}。")
+        else:
+            self.status_var.set(f"已导出预设到 {destination}。")
 
     def _import_preset(self) -> None:
         if self.repository is None or self.loaded_profile is None:
@@ -534,13 +757,25 @@ class SoulmaskTrainerApp(tk.Tk):
 
         try:
             preset = self.repository.import_preset(Path(source))
+            current_values = self._collect_values()
+            normalized_values, skipped_keys = self._normalize_preset_values(preset.values)
+            diff_items = build_value_diff(current_values, normalized_values)
         except (TrainerDataError, OSError, ValueError, json.JSONDecodeError) as error:
             messagebox.showerror("导入失败", str(error))
             self.status_var.set(str(error))
             return
 
-        updated_count = self._apply_values_to_fields(preset.values)
-        self.status_var.set(f"已导入预设“{preset.source_profile}”，更新 {updated_count} 个字段。")
+        if not normalized_values:
+            messagebox.showinfo("没有可导入的字段", "这个预设里的字段与当前模板不匹配。")
+            self.status_var.set("导入的预设没有可应用到当前模板的字段。")
+            return
+        if not diff_items:
+            ignored_text = f"，忽略 {len(skipped_keys)} 个不适用字段" if skipped_keys else ""
+            messagebox.showinfo("预设没有变化", f"这个预设与当前数值一致{ignored_text}。")
+            self.status_var.set(f"预设没有带来新的改动{ignored_text}。")
+            return
+
+        self._open_import_preview_dialog(preset, normalized_values, diff_items, skipped_keys)
 
     def _open_batch_apply_dialog(self) -> None:
         if self.repository is None or self.loaded_profile is None:
@@ -617,6 +852,28 @@ class SoulmaskTrainerApp(tk.Tk):
             f"已批量应用到 {len(selected_profiles)} 个模板，最后一个备份位于 {list(backup_paths.values())[-1]}。"
         )
         self._load_selected_profile()
+
+    def _reset_unsaved_changes(self) -> None:
+        if self.loaded_profile is None:
+            return
+
+        changed_keys = self._get_changed_keys()
+        if not changed_keys:
+            self.status_var.set("当前没有未保存改动。")
+            return
+
+        confirmed = messagebox.askyesno(
+            "撤销未保存修改",
+            f"确定要撤销当前 {len(changed_keys)} 项未保存改动吗？",
+        )
+        if not confirmed:
+            return
+
+        for key in changed_keys:
+            self._reset_field(key)
+
+        self.status_var.set(f"已撤销 {len(changed_keys)} 项未保存改动。")
+        self._refresh_change_summary()
 
     def _restore_profile(self) -> None:
         if self.repository is None or self.loaded_profile is None:

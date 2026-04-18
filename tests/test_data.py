@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from soulmask_trainer.data import TrainerRepository, detect_text_encoding, read_json_object
+from soulmask_trainer.data import (
+    TrainerRepository,
+    build_value_diff,
+    detect_text_encoding,
+    get_changed_values,
+    read_json_object,
+)
 
 
 PROFILE_TEXT = """{
@@ -138,6 +144,30 @@ class EncodingTests(unittest.TestCase):
             path = Path(temp_dir_name) / "utf16.json"
             path.write_text(CONFIG_TEXT, encoding="utf-16")
             self.assertEqual(detect_text_encoding(path), "utf-16")
+
+
+class ValueDiffTests(unittest.TestCase):
+    def test_get_changed_values_returns_only_modified_entries(self) -> None:
+        original = {"ExpRatio": 1, "JingShenNoXiaoHao": 0, "DamageYeShengRatio": 1.5}
+        current = {"ExpRatio": 5, "JingShenNoXiaoHao": 0, "DamageYeShengRatio": 0.5}
+
+        changed = get_changed_values(original, current)
+
+        self.assertEqual(changed, {"ExpRatio": 5, "DamageYeShengRatio": 0.5})
+
+    def test_build_value_diff_skips_equal_values(self) -> None:
+        current = {"ExpRatio": 1, "JingShenNoXiaoHao": 0}
+        incoming = {"ExpRatio": 3, "JingShenNoXiaoHao": 0, "NewField": 9}
+
+        diff = build_value_diff(current, incoming)
+
+        self.assertEqual(len(diff), 2)
+        self.assertEqual(diff[0].key, "ExpRatio")
+        self.assertEqual(diff[0].before, 1)
+        self.assertEqual(diff[0].after, 3)
+        self.assertEqual(diff[1].key, "NewField")
+        self.assertIsNone(diff[1].before)
+        self.assertEqual(diff[1].after, 9)
 
 
 if __name__ == "__main__":

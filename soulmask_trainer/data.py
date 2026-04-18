@@ -42,8 +42,31 @@ class PresetData:
     values: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ValueDiff:
+    key: str
+    before: Any
+    after: Any
+
+
 class TrainerDataError(RuntimeError):
     """Raised when Soulmask gameplay settings cannot be loaded or saved."""
+
+
+def get_changed_values(original_values: dict[str, Any], current_values: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in current_values.items()
+        if original_values.get(key) != value
+    }
+
+
+def build_value_diff(current_values: dict[str, Any], incoming_values: dict[str, Any]) -> list[ValueDiff]:
+    return [
+        ValueDiff(key=key, before=current_values.get(key), after=value)
+        for key, value in incoming_values.items()
+        if current_values.get(key) != value
+    ]
 
 
 def detect_text_encoding(path: Path) -> str:
